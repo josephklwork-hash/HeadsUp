@@ -1,65 +1,1887 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import { useEffect, useMemo, useRef, useState } from "react";
+
+/* ---------- types ---------- */
+
+type Role = "student" | "professional";
+type Seat = "top" | "bottom";
+
+type Card = {
+  rank: string;
+  suit: string;
+};
+
+type Street = 0 | 3 | 4 | 5;
+type StreetName = "Preflop" | "Flop" | "Turn" | "River";
+
+type GameState = {
+  stacks: { top: number; bottom: number };
+  bets: { top: number; bottom: number }; // chips currently in front (this street)
+  pot: number; // chips already pulled into pot from prior streets
+};
+
+type HandStatus = "playing" | "ended";
+type HandEndReason = "fold" | "showdown" | null;
+
+type HandResult = {
+  status: HandStatus;
+  winner: Seat | "tie" | null;
+  reason: HandEndReason;
+  message: string;
+};
+
+type ActionLogItem = {
+  id: string;
+  street: StreetName;
+  seat: Seat;
+  text: string;
+};
+
+type HandLogSnapshot = {
+  handNo: number;
+  dealer: Seat;
+  endedStreet: Street;
+  endedBoard: Card[];
+  log: ActionLogItem[];
+
+  heroPos: "SB" | "BB";
+  oppPos: "SB" | "BB";
+
+  heroCards: [Card, Card];
+
+  heroStartStack: number;
+  oppStartStack: number;
+};
+
+/* ---------- constants ---------- */
+
+const RANKS = ["A", "K", "Q", "J", "T", "9", "8", "7", "6", "5", "4", "3", "2"];
+const SUITS = ["♠", "♥", "♦", "♣"];
+
+const STARTING_STACK_BB = 50;
+const SB = 0.5;
+const BB = 1;
+
+/* ---------- helpers ---------- */
+
+function drawUniqueCards(count: number): Card[] {
+  const deck: Card[] = [];
+  for (const suit of SUITS) for (const rank of RANKS) deck.push({ rank, suit });
+
+  for (let i = deck.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [deck[i], deck[j]] = [deck[j], deck[i]];
+  }
+
+  return deck.slice(0, count);
+}
+
+function roundToHundredth(n: number) {
+  return Math.round(n * 100) / 100;
+}
+
+function formatBB(value: number | "") {
+  if (value === "") return "";
+  if (Number.isInteger(value)) return value.toString();
+  return value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function clamp(n: number, lo: number, hi: number) {
+  return Math.max(lo, Math.min(hi, n));
+}
+
+function streetNameFromCount(street: Street): StreetName {
+  if (street === 0) return "Preflop";
+  if (street === 3) return "Flop";
+  if (street === 4) return "Turn";
+  return "River";
+}
+
+function uid() {
+  return Math.random().toString(16).slice(2) + "-" + Date.now().toString(16);
+}
+
+/* ---------- simple poker evaluator (7-card) ---------- */
+
+const RANK_TO_VALUE: Record<string, number> = {
+  A: 14,
+  K: 13,
+  Q: 12,
+  J: 11,
+  T: 10,
+  "9": 9,
+  "8": 8,
+  "7": 7,
+  "6": 6,
+  "5": 5,
+  "4": 4,
+  "3": 3,
+  "2": 2,
+};
+
+function compareScore(a: number[], b: number[]) {
+  const len = Math.max(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    const av = a[i] ?? 0;
+    const bv = b[i] ?? 0;
+    if (av > bv) return 1;
+    if (av < bv) return -1;
+  }
+  return 0;
+}
+
+function getStraightHigh(valuesUniqueDesc: number[]) {
+  const vals = [...valuesUniqueDesc];
+  if (vals[0] === 14) vals.push(1); // wheel
+
+  let run = 1;
+  for (let i = 0; i < vals.length - 1; i++) {
+    if (vals[i] - 1 === vals[i + 1]) {
+      run++;
+      if (run >= 5) {
+        const high = vals[i - 3];
+        return high === 1 ? 5 : high;
+      }
+    } else {
+      run = 1;
+    }
+  }
+  return null;
+}
+
+function evaluate7(cards: Card[]) {
+  const values = cards.map((c) => RANK_TO_VALUE[c.rank]).sort((a, b) => b - a);
+
+  const counts = new Map<number, number>();
+  const suits = new Map<string, number[]>();
+
+  for (const c of cards) {
+    const v = RANK_TO_VALUE[c.rank];
+    counts.set(v, (counts.get(v) ?? 0) + 1);
+    const arr = suits.get(c.suit) ?? [];
+    arr.push(v);
+    suits.set(c.suit, arr);
+  }
+
+  const groups = Array.from(counts.entries())
+    .map(([v, cnt]) => ({ v, cnt }))
+    .sort((a, b) => (b.cnt !== a.cnt ? b.cnt - a.cnt : b.v - a.v));
+
+  // Flush?
+  let flushSuit: string | null = null;
+  let flushValsDesc: number[] = [];
+  for (const [s, vals] of suits.entries()) {
+    if (vals.length >= 5) {
+      const sorted = vals.slice().sort((a, b) => b - a);
+      if (!flushSuit || compareScore(sorted, flushValsDesc) > 0) {
+        flushSuit = s;
+        flushValsDesc = sorted;
+      }
+    }
+  }
+
+  const uniqueDesc = Array.from(new Set(values)).sort((a, b) => b - a);
+  const straightHigh = getStraightHigh(uniqueDesc);
+
+  // Straight flush
+  if (flushSuit) {
+    const fvUnique = Array.from(new Set(flushValsDesc)).sort((a, b) => b - a);
+    const sfHigh = getStraightHigh(fvUnique);
+    if (sfHigh !== null) return [8, sfHigh];
+  }
+
+  // Quads
+  if (groups[0]?.cnt === 4) {
+    const quad = groups[0].v;
+    const kicker = uniqueDesc.find((v) => v !== quad) ?? 0;
+    return [7, quad, kicker];
+  }
+
+  // Full house
+  if (groups[0]?.cnt === 3) {
+    const trips = groups[0].v;
+    const pairCandidate = groups.find((g) => g.v !== trips && g.cnt >= 2);
+    if (pairCandidate) return [6, trips, pairCandidate.v];
+  }
+
+  // Flush
+  if (flushSuit) return [5, ...flushValsDesc.slice(0, 5)];
+
+  // Straight
+  if (straightHigh !== null) return [4, straightHigh];
+
+  // Trips
+  if (groups[0]?.cnt === 3) {
+    const trips = groups[0].v;
+    const kickers = uniqueDesc.filter((v) => v !== trips).slice(0, 2);
+    return [3, trips, ...kickers];
+  }
+
+  // Two pair
+  if (groups[0]?.cnt === 2) {
+    const pairs = groups.filter((g) => g.cnt === 2).map((g) => g.v);
+    if (pairs.length >= 2) {
+      const sorted = pairs.sort((a, b) => b - a);
+      const highPair = sorted[0];
+      const lowPair = sorted[1];
+      const kicker = uniqueDesc.find((v) => v !== highPair && v !== lowPair) ?? 0;
+      return [2, highPair, lowPair, kicker];
+    }
+  }
+
+  // One pair
+  if (groups[0]?.cnt === 2) {
+    const pair = groups[0].v;
+    const kickers = uniqueDesc.filter((v) => v !== pair).slice(0, 3);
+    return [1, pair, ...kickers];
+  }
+
+  // High card
+  return [0, ...uniqueDesc.slice(0, 5)];
+}
+
+const VALUE_TO_NAME: Record<number, string> = {
+  14: "Ace",
+  13: "King",
+  12: "Queen",
+  11: "Jack",
+  10: "Ten",
+  9: "Nine",
+  8: "Eight",
+  7: "Seven",
+  6: "Six",
+  5: "Five",
+  4: "Four",
+  3: "Three",
+  2: "Two",
+};
+
+function pluralRank(v: number) {
+  const name = VALUE_TO_NAME[v] ?? String(v);
+  // simple plural for poker ranks
+  if (name === "Six") return "Sixes";
+  return name + "s";
+}
+
+function cardStr(c: Card) {
+  return `${c.rank}${c.suit}`;
+}
+
+function handDesc(score: number[]) {
+  const cat = score[0];
+
+  // score formats from your evaluator:
+  // 8: [8, sfHigh]
+  // 7: [7, quad, kicker]
+  // 6: [6, trips, pair]
+  // 5: [5, v1, v2, v3, v4, v5] (flush high cards)
+  // 4: [4, straightHigh]
+  // 3: [3, trips, k1, k2]
+  // 2: [2, highPair, lowPair, kicker]
+  // 1: [1, pair, k1, k2, k3]
+  // 0: [0, h1, h2, h3, h4, h5]
+
+  if (cat === 8) return `Straight Flush, ${VALUE_TO_NAME[score[1]]}-high`;
+  if (cat === 7) return `Four of a Kind, ${pluralRank(score[1])} (kicker ${VALUE_TO_NAME[score[2]]})`;
+  if (cat === 6) return `Full House, ${pluralRank(score[1])} full of ${pluralRank(score[2])}`;
+  if (cat === 5) return `Flush, ${VALUE_TO_NAME[score[1]]}-high`;
+  if (cat === 4) return `Straight, ${VALUE_TO_NAME[score[1]]}-high`;
+  if (cat === 3) return `Three of a Kind, ${pluralRank(score[1])} (kicker ${VALUE_TO_NAME[score[2]]})`;
+  if (cat === 2)
+    return `Two Pair, ${pluralRank(score[1])} and ${pluralRank(score[2])} (kicker ${VALUE_TO_NAME[score[3]]})`;
+  if (cat === 1) return `One Pair, ${pluralRank(score[1])} (kicker ${VALUE_TO_NAME[score[2]]})`;
+
+  // high card
+  return `High Card, ${VALUE_TO_NAME[score[1]]} (kicker ${VALUE_TO_NAME[score[2]]})`;
+}
+
+function handRankOnly(score: number[]) {
+  switch (score[0]) {
+    case 8: return "Straight Flush";
+    case 7: return "Four of a Kind";
+    case 6: return "Full House";
+    case 5: return "Flush";
+    case 4: return "Straight";
+    case 3: return "Three of a Kind";
+    case 2: return "Two Pair";
+    case 1: return "One Pair";
+    default: return "High Card";
+  }
+}
+
+
+/* ---------- UI components ---------- */
+
+const SUIT_COLOR: Record<string, string> = {
+  "♠": "text-black",
+  "♥": "text-red-600",
+  "♦": "text-blue-600",
+  "♣": "text-green-600",
+};
+
+function CardTile({ card }: { card: Card }) {
+  const colorClass = SUIT_COLOR[card.suit];
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+    <div className="relative h-24 w-16 rounded-xl border bg-white shadow-sm">
+      <div className={`absolute left-4 top-4 text-xl font-bold ${colorClass}`}>
+        {card.rank}
+      </div>
+      <div className={`absolute bottom-4 right-4 text-xl font-bold ${colorClass}`}>
+        {card.suit}
+      </div>
     </div>
   );
 }
+
+function renderActionText(text: string) {
+  return text.split(/([♠♥♦♣])/).map((part, i) => {
+    const suitClass = SUIT_COLOR[part];
+
+    if (suitClass) {
+      // Thin, crisp outline (no blur). Webkit stroke gives a continuous outline (great in Safari),
+      // and 8-direction text-shadow helps fill tiny gaps on sharp tips.
+      const outlineStyle: React.CSSProperties = {
+        WebkitTextStroke: "0.45px #fff",
+textShadow: `
+  -0.45px  0px   0 #fff,
+   0.45px  0px   0 #fff,
+   0px   -0.45px 0 #fff,
+   0px    0.45px 0 #fff,
+  -0.45px -0.45px 0 #fff,
+   0.45px -0.45px 0 #fff,
+  -0.45px  0.45px 0 #fff,
+   0.45px  0.45px 0 #fff
+`,
+      };
+
+      return (
+        <span key={i} className={suitClass} style={outlineStyle}>
+          {part}
+        </span>
+      );
+    }
+
+    return <span key={i}>{part}</span>;
+  });
+}
+
+
+function CardBack() {
+  return (
+    <div className="relative h-24 w-16 rounded-xl border bg-white shadow-sm">
+      <div className="absolute inset-2 rounded-lg border border-dashed opacity-40" />
+    </div>
+  );
+}
+
+function BetChip({ amount, label }: { amount: number; label?: string }) {
+  if (amount <= 0) return null;
+  return (
+    <div className="flex h-9 w-9 flex-col items-center justify-center rounded-full border bg-white text-black shadow-sm">
+      <div className="text-[11px] font-bold leading-none tabular-nums">
+        {formatBB(amount)}
+      </div>
+      {label ? (
+        <div className="mt-[1px] text-[9px] font-semibold leading-none opacity-70">
+          {label}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ConfirmModal({
+  open,
+  title,
+  message,
+  cancelText = "Go back",
+  confirmText = "Confirm",
+  onCancel,
+  onConfirm,
+}: {
+  open: boolean;
+  title: string;
+  message: string;
+  cancelText?: string;
+  confirmText?: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-6">
+      <div className="absolute inset-0 bg-black/50" onClick={onCancel} aria-hidden="true" />
+      <div className="relative w-full max-w-md rounded-3xl border border-gray-300 bg-gray-100 p-6 shadow-lg">
+        <h3 className="mb-2 text-lg font-bold text-gray-900">{title}</h3>
+        <p className="mb-6 text-sm text-gray-800">{message}</p>
+
+        <div className="flex justify-end gap-3">
+          <button
+            onClick={onCancel}
+            className="rounded-2xl border px-4 py-2 text-sm font-semibold text-gray-900 transition-colors hover:bg-gray-200"
+          >
+            {cancelText}
+          </button>
+          <button
+            onClick={onConfirm}
+            className="rounded-2xl border px-4 py-2 text-sm font-semibold text-gray-900 transition-colors hover:bg-gray-200"
+          >
+            {confirmText}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+/* ---------- main ---------- */
+
+export default function Home() {
+  const [seatedRole, setSeatedRole] = useState<Role | null>(null);
+
+  const [handId, setHandId] = useState(0);
+  const [street, setStreet] = useState<Street>(0);
+  const [dealerOffset, setDealerOffset] = useState<0 | 1>(0);
+
+  const [betSize, setBetSize] = useState<number | "">(2);
+
+  const [game, setGame] = useState<GameState>({
+    stacks: { top: STARTING_STACK_BB, bottom: STARTING_STACK_BB },
+    bets: { top: 0, bottom: 0 },
+    pot: 0,
+  });
+
+  const [cards, setCards] = useState<Card[] | null>(null);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+
+  const [actionLog, setActionLog] = useState<ActionLogItem[]>([]);
+  const [handLogHistory, setHandLogHistory] = useState<HandLogSnapshot[]>([]);
+  const [logViewOffset, setLogViewOffset] = useState(0);
+
+const [handResult, setHandResult] = useState<HandResult>({
+  status: "playing",
+  winner: null,
+  reason: null,
+  message: "",
+});
+
+const [endedBoardSnapshot, setEndedBoardSnapshot] = useState<Street>(0);
+
+  // betting round tracking
+  const [toAct, setToAct] = useState<Seat>("bottom");
+  const [lastAggressor, setLastAggressor] = useState<Seat | null>(null);
+  const [actionsThisStreet, setActionsThisStreet] = useState(0);
+  const [lastToActAfterAggro, setLastToActAfterAggro] = useState<Seat | null>(null);
+  const [sawCallThisStreet, setSawCallThisStreet] = useState(false);
+  const [lastRaiseSize, setLastRaiseSize] = useState<number>(BB);
+  const [checked, setChecked] = useState<{ top: boolean; bottom: boolean }>({
+    top: false,
+    bottom: false,
+  });
+
+  // timers
+  const opponentTimerRef = useRef<number | null>(null);
+  const nextHandTimerRef = useRef<number | null>(null);
+  const actionLogRef = useRef<ActionLogItem[]>([]);
+  const endedStreetRef = useRef<Street>(0);
+  const blindsPostedRef = useRef(false);
+  const gameRef = useRef(game);
+  const streetRef = useRef<Street>(street);
+
+useEffect(() => {
+  gameRef.current = game;
+}, [game]);
+
+useEffect(() => {
+  streetRef.current = street;
+}, [street]);
+
+  const dealerSeat: Seat = useMemo(
+    () => ((handId + dealerOffset) % 2 === 0 ? "top" : "bottom"),
+    [handId, dealerOffset]
+  );
+
+  const nonDealerSeat: Seat = dealerSeat === "top" ? "bottom" : "top";
+
+  const [handStartStacks, setHandStartStacks] = useState<{ top: number; bottom: number }>({
+  top: STARTING_STACK_BB,
+  bottom: STARTING_STACK_BB,
+});
+
+  const [showdownFirst, setShowdownFirst] = useState<Seat | null>(null); // who must show first at showdown
+  const [oppRevealed, setOppRevealed] = useState(false);                // whether opponent cards are face-up
+  const [youMucked, setYouMucked] = useState(false);                    // whether your cards are hidden at showdown
+  const [streetBettor, setStreetBettor] = useState<Seat | null>(null);
+
+  // 0 = current hand, 1 = previous hand, 2 = two hands ago, etc.
+
+  function clearTimers() {
+    if (opponentTimerRef.current) {
+      window.clearTimeout(opponentTimerRef.current);
+      opponentTimerRef.current = null;
+    }
+    if (nextHandTimerRef.current) {
+      window.clearTimeout(nextHandTimerRef.current);
+      nextHandTimerRef.current = null;
+    }
+  }
+
+  function snapshotCurrentHandLog() {
+  const endedSt = endedStreetRef.current;
+
+  setHandLogHistory((prev) => {
+  const snap: HandLogSnapshot = {
+  handNo: handId,
+  dealer: dealerSeat,
+  endedStreet: endedSt,
+  endedBoard: board.slice(0, endedSt),
+  log: actionLogRef.current,
+
+  heroPos: dealerSeat === "bottom" ? "SB" : "BB",
+  oppPos: dealerSeat === "top" ? "SB" : "BB",
+
+  heroCards:
+    RANK_TO_VALUE[youC!.rank] >= RANK_TO_VALUE[youD!.rank]
+      ? [youC!, youD!]
+      : [youD!, youC!],
+
+  heroStartStack: handStartStacks.bottom,
+  oppStartStack: handStartStacks.top,
+};
+
+    if (prev[0]?.handNo === snap.handNo) return prev;
+    return [snap, ...prev].slice(0, 30);
+  });
+}
+
+  /* deal cards each hand */
+  useEffect(() => {
+    if (!seatedRole) {
+      setCards(null);
+      return;
+    }
+    setCards(drawUniqueCards(9));
+  }, [seatedRole, handId]);
+
+  function logAction(seat: Seat, text: string, potOverride?: number) {
+  const potNow =
+    potOverride ??
+    roundToHundredth(gameRef.current.pot + gameRef.current.bets.top + gameRef.current.bets.bottom);
+
+  const lower = text.toLowerCase();
+
+const shouldAppendPot =
+  blindsPostedRef.current &&
+  !lower.startsWith("posts") &&
+  !lower.startsWith("shows") &&
+  !lower.startsWith("split") &&
+  !lower.startsWith("wins");
+
+  const finalText = shouldAppendPot ? `${text} (${formatBB(potNow)}bb)` : text;
+
+  const item: ActionLogItem = {
+    id: uid(),
+    street: streetNameFromCount(street),
+    seat,
+    text: finalText,
+  };
+
+  setActionLog((prev) => {
+    const next = [...prev, item];
+    actionLogRef.current = next;
+    return next;
+  });
+}
+
+  function resetStreetRound(nextStreet: Street) {
+    setStreet(nextStreet);
+    setChecked({ top: false, bottom: false });
+    setLastAggressor(null);
+    setLastToActAfterAggro(null);
+    setActionsThisStreet(0);
+    setStreetBettor(null);
+    setSawCallThisStreet(false);
+    setLastRaiseSize(BB);
+
+    // HU rule: preflop first to act = dealer; postflop = non-dealer
+    const firstToAct = nextStreet === 0 ? dealerSeat : nonDealerSeat;
+    setToAct(firstToAct);
+  }
+
+  function pullBetsIntoPot() {
+    setGame((prev) => ({
+      ...prev,
+      pot: roundToHundredth(prev.pot + prev.bets.top + prev.bets.bottom),
+      bets: { top: 0, bottom: 0 },
+    }));
+  }
+
+  function endHand(winner: Seat | "tie", reason: HandEndReason, message: string) {
+    setGame((prev) => {
+      const fullPot = roundToHundredth(prev.pot + prev.bets.top + prev.bets.bottom);
+
+      if (winner === "tie") {
+        const half = roundToHundredth(fullPot / 2);
+        return {
+          pot: 0,
+          bets: { top: 0, bottom: 0 },
+          stacks: {
+            top: roundToHundredth(prev.stacks.top + half),
+            bottom: roundToHundredth(prev.stacks.bottom + (fullPot - half)),
+          },
+        };
+      }
+
+      return {
+        pot: 0,
+        bets: { top: 0, bottom: 0 },
+        stacks: {
+          ...prev.stacks,
+          [winner]: roundToHundredth(prev.stacks[winner] + fullPot),
+        } as GameState["stacks"],
+      };
+    });
+
+    setHandResult({ status: "ended", winner, reason, message });
+
+    setTimeout(() => {
+  snapshotCurrentHandLog();
+}, 0);
+
+
+    // reveal behavior at showdown
+if (reason === "showdown") {
+  // tie => both must show
+  if (winner === "tie") {
+    setOppRevealed(true);
+    setYouMucked(false);
+    return;
+  }
+
+  // If opponent must show first (opponent bet, you called)
+  if (showdownFirst === "top") {
+    setOppRevealed(true);
+
+    // Default: you do NOT show unless needed/wanted
+    // - if you lose, you auto-muck
+    // - if you win, you also default to muck (you can optionally show)
+    setYouMucked(true);
+    return;
+  }
+
+  // If you must show first (you bet, opponent called)
+  if (showdownFirst === "bottom") {
+    // Opponent only shows if they win
+    setOppRevealed(winner === "top");
+    setYouMucked(false);
+    return;
+  }
+
+  // If no bettor tracked (check-check type showdown), just show both for now
+  setOppRevealed(true);
+  setYouMucked(false);
+}
+
+  }
+
+  function startNewHand() {
+    setHandResult({ status: "playing", winner: null, reason: null, message: "" });
+    setActionLog([]);
+    actionLogRef.current = [];
+    setStreet(0);
+    setChecked({ top: false, bottom: false });
+    setLastAggressor(null);
+    setLastToActAfterAggro(null);
+    setActionsThisStreet(0);
+    setBetSize(2);
+    setStreetBettor(null);
+    setShowdownFirst(null);
+    setOppRevealed(false);
+    setYouMucked(false);
+
+    setSawCallThisStreet(false);
+
+    setHandId((x) => x + 1);
+  }
+
+  function resetGame() {
+    // reset stacks + randomize starting dealer + deal fresh hand
+    clearTimers();
+
+    setDealerOffset(Math.random() < 0.5 ? 0 : 1);
+
+    setGame({
+      stacks: { top: STARTING_STACK_BB, bottom: STARTING_STACK_BB },
+      bets: { top: 0, bottom: 0 },
+      pot: 0,
+    });
+
+    setHandResult({ status: "playing", winner: null, reason: null, message: "" });
+    setActionLog([]);
+    actionLogRef.current = [];
+    setStreet(0);
+    setChecked({ top: false, bottom: false });
+    setLastAggressor(null);
+    setLastToActAfterAggro(null);
+    setActionsThisStreet(0);
+    setSawCallThisStreet(false);
+    setStreetBettor(null);
+    setShowdownFirst(null);
+    setOppRevealed(false);
+    setYouMucked(false);
+
+    setBetSize(2);
+
+    setHandId((x) => x + 1); // guarantees new hand effects run
+  }
+
+  function setBetSizeRounded(value: number | "") {
+    if (value === "") {
+      setBetSize("");
+      return;
+    }
+    if (!Number.isFinite(value)) return;
+    setBetSize(roundToHundredth(Math.max(0, value)));
+  }
+
+  const oppRaw1 = cards?.[0];
+  const oppRaw2 = cards?.[1];
+
+const [oppA, oppB] = useMemo(() => {
+  if (!oppRaw1 || !oppRaw2) return [undefined, undefined] as const;
+  const a = RANK_TO_VALUE[oppRaw1.rank];
+  const b = RANK_TO_VALUE[oppRaw2.rank];
+  return a >= b ? ([oppRaw1, oppRaw2] as const) : ([oppRaw2, oppRaw1] as const);
+}, [oppRaw1, oppRaw2]);
+
+  const youRaw1 = cards?.[2];
+  const youRaw2 = cards?.[3];
+
+  const [youC, youD] = useMemo(() => {
+  if (!youRaw1 || !youRaw2) return [undefined, undefined] as const;
+  const a = RANK_TO_VALUE[youRaw1.rank];
+  const b = RANK_TO_VALUE[youRaw2.rank];
+  return a >= b ? ([youRaw1, youRaw2] as const) : ([youRaw2, youRaw1] as const);
+}, [youRaw1, youRaw2]);
+
+  const board = cards ? cards.slice(4, 9) : [];
+
+  const heroHandRank = useMemo(() => {
+  if (!youC || !youD) return null;
+  if (street === 0) return null; // only postflop
+  const shownBoard = board.slice(0, street);
+  const score = evaluate7([youC, youD, ...shownBoard]);
+  return handRankOnly(score);
+}, [youC, youD, board, street]);
+
+  /* post blinds at start of each hand */
+  useEffect(() => {
+    if (!seatedRole) return;
+    setHandStartStacks(gameRef.current.stacks);
+
+    // reset per-hand state
+    setHandResult({ status: "playing", winner: null, reason: null, message: "" });
+    setActionLog([]);
+    actionLogRef.current = [];
+    setStreet(0);
+    setChecked({ top: false, bottom: false });
+    setLastAggressor(null);
+    setLastToActAfterAggro(null);
+    setSawCallThisStreet(false);
+    setActionsThisStreet(0);
+    setLastRaiseSize(BB);
+
+    const topBlind = dealerSeat === "top" ? SB : BB;
+    const bottomBlind = dealerSeat === "bottom" ? SB : BB;
+
+    setGame((prev) => ({
+      pot: 0,
+      bets: {
+        top: roundToHundredth(topBlind),
+        bottom: roundToHundredth(bottomBlind),
+      },
+      stacks: {
+        top: roundToHundredth(Math.max(0, prev.stacks.top - topBlind)),
+        bottom: roundToHundredth(Math.max(0, prev.stacks.bottom - bottomBlind)),
+      },
+    }));
+
+    // who acts first preflop = dealer
+    setToAct(dealerSeat);
+
+    setTimeout(() => {
+  blindsPostedRef.current = false;
+
+  logAction(
+    "top",
+    dealerSeat === "top" ? `Posts SB ${formatBB(SB)}bb` : `Posts BB ${formatBB(BB)}bb`
+  );
+  logAction(
+    "bottom",
+    dealerSeat === "bottom" ? `Posts SB ${formatBB(SB)}bb` : `Posts BB ${formatBB(BB)}bb`
+  );
+
+  blindsPostedRef.current = true;
+}, 0);
+
+    setBetSize(2);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seatedRole, handId, dealerSeat]);
+
+  const topLabel = dealerSeat === "top" ? "SB" : "BB";
+  const bottomLabel = dealerSeat === "bottom" ? "SB" : "BB";
+
+  const isBottomTurn = seatedRole && toAct === "bottom" && handResult.status === "playing";
+
+ useEffect(() => {
+  function onKeyDown(e: KeyboardEvent) {
+    if (e.key !== "Enter") return;
+    if (!(seatedRole && toAct === "bottom" && handResult.status === "playing")) return;
+
+    const defaultTo =
+      street === 0
+        ? 2.5
+        : roundToHundredth((game.pot + game.bets.top + game.bets.bottom) * 0.5);
+
+    const size = betSize === "" ? defaultTo : betSize;
+
+    actBetRaiseTo("bottom", size);
+  }
+
+  window.addEventListener("keydown", onKeyDown);
+  return () => window.removeEventListener("keydown", onKeyDown);
+}, [seatedRole, toAct, handResult.status, street, game.pot, game.bets.top, game.bets.bottom, betSize]);
+
+  function currentFacingBet(seat: Seat) {
+    const other: Seat = seat === "top" ? "bottom" : "top";
+    return game.bets[other] > game.bets[seat];
+  }
+
+  function amountToCall(seat: Seat) {
+    const other: Seat = seat === "top" ? "bottom" : "top";
+    return roundToHundredth(Math.max(0, game.bets[other] - game.bets[seat]));
+  }
+
+  function canCheck(seat: Seat, g: GameState = gameRef.current, st: Street = streetRef.current) {
+  const other: Seat = seat === "top" ? "bottom" : "top";
+
+  if (st === 0 && g.bets[other] > g.bets[seat]) return false;
+
+  return roundToHundredth(g.bets[other]) === roundToHundredth(g.bets[seat]);
+}
+
+  function settleIfStreetComplete() {
+    if (handResult.status !== "playing") return;
+
+    const equalBets = roundToHundredth(game.bets.top) === roundToHundredth(game.bets.bottom);
+
+    if (lastAggressor) {
+      if (equalBets && lastToActAfterAggro === null) {
+        pullBetsIntoPot();
+
+        if (street < 5) {
+  const nextStreet: Street = street === 0 ? 3 : street === 3 ? 4 : 5;
+
+  // If anyone is all-in postflop, run it out to the river immediately
+  const someoneAllIn = (street !== 0) && (game.stacks.top <= 0 || game.stacks.bottom <= 0);
+
+  if (someoneAllIn) {
+    // show the full board
+    setStreet(5);
+
+    // go straight to showdown
+    resolveShowdown();
+
+  } else {
+    resetStreetRound(nextStreet);
+  }
+} else {
+  // showdown (existing)
+  resolveShowdown();
+
+}
+
+      }
+      return;
+    }
+
+    const bothChecked = checked.top && checked.bottom;
+
+// ✅ Preflop special: SB calls, BB checks => street ends immediately
+const preflopCallThenCheckClosed =
+  street === 0 &&
+  sawCallThisStreet &&
+  (checked.top || checked.bottom) &&
+  equalBets;
+
+// ✅ Postflop: either both checked, OR bet was called then the other checked (your old rule)
+const postflopCallThenCheckClosed =
+  street !== 0 &&
+  sawCallThisStreet &&
+  (checked.top || checked.bottom) &&
+  actionsThisStreet >= 2;
+
+if ((bothChecked || preflopCallThenCheckClosed || postflopCallThenCheckClosed) && equalBets) {
+  pullBetsIntoPot();
+
+  if (street < 5) {
+    const nextStreet: Street = street === 0 ? 3 : street === 3 ? 4 : 5;
+
+    const someoneAllIn = (street !== 0) && (game.stacks.top <= 0 || game.stacks.bottom <= 0);
+
+    if (someoneAllIn) {
+      setStreet(5);
+      resolveShowdown();
+    } else {
+      resetStreetRound(nextStreet);
+    }
+  } else {
+    resolveShowdown();
+  }
+
+}
+
+  }
+
+    function resolveShowdown() {
+    const top7 = [oppA!, oppB!, ...board] as Card[];
+    const bottom7 = [youC!, youD!, ...board] as Card[];
+
+    const topScore = evaluate7(top7);
+    const bottomScore = evaluate7(bottom7);
+    const cmp = compareScore(bottomScore, topScore);
+    endedStreetRef.current = 5;
+    setEndedBoardSnapshot(5);
+
+    const topBest5 = sortBest5ForDisplay(best5From7(top7));
+    const bottomBest5 = sortBest5ForDisplay(best5From7(bottom7));
+
+    logAction(
+  "top",
+  `Shows ${topBest5.map(cardStr).join("\u00A0")}`
+);
+logAction(
+  "bottom",
+  `Shows ${bottomBest5.map(cardStr).join("\u00A0")}`
+);
+
+const potTotal = formatBB(
+  roundToHundredth(
+    gameRef.current.pot + gameRef.current.bets.top + gameRef.current.bets.bottom
+  )
+);
+
+if (cmp > 0) {
+  logAction(
+    "bottom",
+    `Wins ${potTotal} BB ${bottomBest5.map(cardStr).join("\u00A0")}`
+  );
+  endHand("bottom", "showdown", `You win ${potTotal} BB`);
+  return;
+}
+if (cmp < 0) {
+  logAction(
+    "top",
+    `Wins ${potTotal} BB ${topBest5.map(cardStr).join("\u00A0")}`
+  );
+  endHand("top", "showdown", `Opponent wins ${potTotal} BB`);
+  return;
+}
+
+const halfPot = formatBB(roundToHundredth((game.pot + game.bets.top + game.bets.bottom) / 2));
+
+logAction(
+  "bottom",
+  `Split pot ${halfPot} BB ${bottomBest5.map(cardStr).join("\u00A0")}`
+);
+endHand("tie", "showdown", `Split pot ${halfPot} BB`);
+
+  }
+
+  function best5From7(all: Card[]) {
+  let bestScore: number[] | null = null;
+  let bestHand: Card[] = [];
+
+  for (let a = 0; a < all.length - 4; a++) {
+    for (let b = a + 1; b < all.length - 3; b++) {
+      for (let c = b + 1; c < all.length - 2; c++) {
+        for (let d = c + 1; d < all.length - 1; d++) {
+          for (let e = d + 1; e < all.length; e++) {
+            const hand = [all[a], all[b], all[c], all[d], all[e]];
+            const score = evaluate7(hand);
+            if (!bestScore || compareScore(score, bestScore) > 0) {
+              bestScore = score;
+              bestHand = hand;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return bestHand;
+}
+
+function sortBest5ForDisplay(cards: Card[]) {
+  const score = evaluate7(cards);
+  const cat = score[0];
+
+  const groups = new Map<number, Card[]>();
+  for (const c of cards) {
+    const v = RANK_TO_VALUE[c.rank];
+    const arr = groups.get(v) ?? [];
+    arr.push(c);
+    groups.set(v, arr);
+  }
+
+  const take = (v: number) => {
+    const arr = groups.get(v);
+    if (!arr || arr.length === 0) return null;
+    const c = arr.shift()!;
+    if (arr.length === 0) groups.delete(v);
+    return c;
+  };
+
+  const takeAll = (v: number) => {
+    const arr = groups.get(v) ?? [];
+    groups.delete(v);
+    return arr;
+  };
+
+  // Straight / Straight Flush: show in sequence high->low; wheel = 5-4-3-2-A
+  if (cat === 4 || cat === 8) {
+    const high = score[1];
+    const seq =
+      high === 5
+        ? [5, 4, 3, 2, 14]
+        : [high, high - 1, high - 2, high - 3, high - 4];
+
+    return seq.map((v) => take(v)!).filter(Boolean) as Card[];
+  }
+
+  // Quads
+  if (cat === 7) {
+    const quad = score[1];
+    const kicker = score[2];
+    return [...takeAll(quad), take(kicker)!].filter(Boolean) as Card[];
+  }
+
+  // Full House
+  if (cat === 6) {
+    const trips = score[1];
+    const pair = score[2];
+    return [...takeAll(trips), ...takeAll(pair)].filter(Boolean) as Card[];
+  }
+
+  // Flush (show high->low from score)
+  if (cat === 5) {
+    const vals = score.slice(1, 6);
+    return vals.map((v) => take(v)!).filter(Boolean) as Card[];
+  }
+
+  // Trips
+  if (cat === 3) {
+    const trips = score[1];
+    const kickers = score.slice(2);
+    return [...takeAll(trips), ...kickers.map((v) => take(v)!)].filter(Boolean) as Card[];
+  }
+
+  // Two Pair
+  if (cat === 2) {
+    const highPair = score[1];
+    const lowPair = score[2];
+    const kicker = score[3];
+    return [...takeAll(highPair), ...takeAll(lowPair), take(kicker)!].filter(Boolean) as Card[];
+  }
+
+  // One Pair
+  if (cat === 1) {
+    const pair = score[1];
+    const kickers = score.slice(2);
+    return [...takeAll(pair), ...kickers.map((v) => take(v)!)].filter(Boolean) as Card[];
+  }
+
+  // High Card
+  const vals = score.slice(1, 6);
+  return vals.map((v) => take(v)!).filter(Boolean) as Card[];
+}
+
+function cards5Str(cards5: Card[]) {
+  return cards5.map(cardStr).join(" ");
+}
+
+  function actFold(seat: Seat) {
+    if (handResult.status !== "playing") return;
+    const other: Seat = seat === "top" ? "bottom" : "top";
+    logAction(seat, "Folds");
+    endedStreetRef.current = street;
+    setEndedBoardSnapshot(street);
+    const potTotal = formatBB(
+  roundToHundredth(game.pot + game.bets.top + game.bets.bottom)
+);
+
+logAction(
+  other,
+  `${seat === "bottom" ? "Opponent" : "You"} wins ${potTotal}bb\n(no showdown)`
+);
+
+endHand(
+  other,
+  "fold",
+  seat === "bottom" ? "You folded." : "Opponent folded."
+);
+
+  }
+
+  function actCheck(seat: Seat) {
+    if (handResult.status !== "playing") return;
+    if (!canCheck(seat)) return;
+
+    logAction(seat, "Checks");
+    setChecked((prev) => ({ ...prev, [seat]: true }));
+    setActionsThisStreet((n) => n + 1);
+
+    if (
+  street === 0 &&
+  sawCallThisStreet &&
+  roundToHundredth(game.bets.top) === roundToHundredth(game.bets.bottom)
+) {
+  return;
+}
+
+const other: Seat = seat === "top" ? "bottom" : "top";
+setToAct(other);
+  }
+
+  function actCall(seat: Seat) {
+    if (handResult.status !== "playing") return;
+
+    const toCall = amountToCall(seat);
+    const add = roundToHundredth(Math.min(toCall, game.stacks[seat]));
+
+    if (add <= 0) {
+      if (canCheck(seat)) actCheck(seat);
+      return;
+    }
+
+    setGame((prev) => ({
+      ...prev,
+      stacks: {
+        ...prev.stacks,
+        [seat]: roundToHundredth(prev.stacks[seat] - add),
+      } as GameState["stacks"],
+      bets: {
+        ...prev.bets,
+        [seat]: roundToHundredth(prev.bets[seat] + add),
+      } as GameState["bets"],
+    }));
+
+    const callerWillBeAllIn = roundToHundredth(game.stacks[seat] - add) <= 0;
+const bettor = streetBettor;
+if (street !== 0 && callerWillBeAllIn && bettor) {
+  setShowdownFirst(bettor);
+}
+
+
+    logAction(
+  seat,
+  `Calls ${formatBB(add)}bb`,
+  roundToHundredth(game.pot + game.bets.top + game.bets.bottom + add)
+);
+    setSawCallThisStreet(true);
+    setActionsThisStreet((n) => n + 1);
+
+    if (lastToActAfterAggro === seat) setLastToActAfterAggro(null);
+
+    // If this is a river call facing a bet, bettor must show first
+if (street === 5 && currentFacingBet(seat)) {
+  const bettor = streetBettor;
+  if (bettor) setShowdownFirst(bettor);
+}
+
+
+    const other: Seat = seat === "top" ? "bottom" : "top";
+    setToAct(other);
+  }
+
+  function actBetRaiseTo(seat: Seat, targetTotalBet: number) {
+  if (handResult.status !== "playing") return;
+
+  const other: Seat = seat === "top" ? "bottom" : "top";
+  const curr = game.bets[seat];
+  const otherBet = game.bets[other];
+
+  const isFacing = otherBet > curr;
+
+// NLHE:
+// - If facing a bet, min raise-to = otherBet + lastRaiseSize
+// - If not facing a bet, min bet = BB (or min raise over your own current bet)
+    const minTarget = isFacing
+    ? roundToHundredth(otherBet + lastRaiseSize)
+    : roundToHundredth(curr + Math.max(BB, 0));
+
+    const maxTarget = roundToHundredth(curr + game.stacks[seat]);
+    const target = roundToHundredth(clamp(targetTotalBet, minTarget, maxTarget));
+
+    const add = roundToHundredth(Math.max(0, target - curr));
+    if (add <= 0) return;
+
+    setGame((prev) => ({
+      ...prev,
+      stacks: {
+        ...prev.stacks,
+        [seat]: roundToHundredth(prev.stacks[seat] - add),
+      } as GameState["stacks"],
+      bets: {
+        ...prev.bets,
+        [seat]: roundToHundredth(prev.bets[seat] + add),
+      } as GameState["bets"],
+    }));
+
+    const newRaiseSize = isFacing
+    ? roundToHundredth(target - otherBet)
+    : roundToHundredth(target - curr);
+
+    setLastRaiseSize(newRaiseSize);
+
+
+    logAction(
+  seat,
+  otherBet > curr ? `Raises to ${formatBB(target)}bb` : `Bets ${formatBB(target)}bb`,
+  roundToHundredth(game.pot + game.bets.top + game.bets.bottom + add)
+);
+
+    setStreetBettor(seat);
+
+    setActionsThisStreet((n) => n + 1);
+    setChecked({ top: false, bottom: false });
+
+    setLastAggressor(seat);
+    setLastToActAfterAggro(other);
+    setToAct(other);
+  }
+
+  /* ---------- opponent random behavior ---------- */
+
+  function pickOpponentBetSize(st: Street) {
+    const g = gameRef.current;
+    const potNow = roundToHundredth(g.pot + g.bets.top + g.bets.bottom);
+
+
+    if (st === 0) {
+      const options = [2.5, 3, 4, 5];
+      return options[Math.floor(Math.random() * options.length)];
+    }
+
+    const fractions = [0.33, 0.5, 0.75];
+    const f = fractions[Math.floor(Math.random() * fractions.length)];
+    const desiredAdd = roundToHundredth(potNow * f);
+
+    return roundToHundredth(game.bets.top + desiredAdd);
+  }
+
+  function opponentAct() {
+  if (handResult.status !== "playing") return;
+  if (toAct !== "top") return;
+
+  const tooMany = actionsThisStreet >= 4;
+  const st = street;
+
+  // Use latest game state (avoids stale reads that caused illegal "Checks")
+  const g = gameRef.current;
+  if (streetRef.current === 0 && (g.bets.top === 0 || g.bets.bottom === 0)) return;
+
+ const callAmt = roundToHundredth(Math.max(0, g.bets.bottom - g.bets.top));
+  const facing = callAmt > 0;
+
+  // If not facing a bet, opponent may check or bet
+  if (!facing) {
+ 
+  const r = Math.random();
+  if (tooMany || r < 0.62) {
+    actCheck("top");
+    return;
+  }
+
+  actBetRaiseTo("top", pickOpponentBetSize(st));
+  return;
+}
+
+  // Facing a bet: opponent must fold / call / raise (NO checking)
+  const potNow = roundToHundredth(g.pot + g.bets.top + g.bets.bottom);
+  const pressure = potNow > 0 ? clamp(callAmt / potNow, 0, 1) : 0.25;
+
+  const foldP = clamp(0.12 + pressure * 0.35, 0.05, 0.55);
+  const raiseP = tooMany ? 0 : clamp(0.18 - pressure * 0.1, 0.06, 0.22);
+
+  const r = Math.random();
+  if (r < foldP) {
+    actFold("top");
+    return;
+  }
+
+  if (r < foldP + raiseP) {
+    const curr = g.bets.top;
+    const otherBet = g.bets.bottom;
+
+    const minRaiseTo = roundToHundredth(otherBet + lastRaiseSize);
+    const target = pickOpponentBetSize(st);
+
+    actBetRaiseTo("top", Math.max(target, minRaiseTo));
+    return;
+  }
+
+  actCall("top");
+}
+
+  // opponent takes 10 seconds per decision
+  useEffect(() => {
+    if (!seatedRole) return;
+    if (handResult.status !== "playing") return;
+    if (toAct !== "top") return;
+
+    if (opponentTimerRef.current) window.clearTimeout(opponentTimerRef.current);
+    opponentTimerRef.current = window.setTimeout(() => {
+      opponentAct();
+    }, 1000);
+
+    return () => {
+      if (opponentTimerRef.current) window.clearTimeout(opponentTimerRef.current);
+      opponentTimerRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [toAct, handResult.status, street, seatedRole, game.bets.top, game.bets.bottom]);
+
+  // settle / advance street
+  useEffect(() => {
+    if (!seatedRole) return;
+    if (handResult.status !== "playing") return;
+    settleIfStreetComplete();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    game.bets.top,
+    game.bets.bottom,
+    checked.top,
+    checked.bottom,
+    lastAggressor,
+    lastToActAfterAggro,
+  ]);
+
+  useEffect(() => {
+  function onKeyDown(e: KeyboardEvent) {
+    if (e.key === "ArrowLeft") {
+      setLogViewOffset((prev) =>
+        Math.min(prev + 1, handLogHistory.length)
+      );
+    }
+
+    if (e.key === "ArrowRight") {
+      setLogViewOffset((prev) =>
+        Math.max(prev - 1, 0)
+      );
+    }
+  }
+
+  window.addEventListener("keydown", onKeyDown);
+  return () => window.removeEventListener("keydown", onKeyDown);
+}, [handLogHistory.length]);
+
+
+  // auto next hand 10 seconds after hand ends
+  useEffect(() => {
+    if (handResult.status !== "ended") return;
+
+    if (nextHandTimerRef.current) window.clearTimeout(nextHandTimerRef.current);
+    nextHandTimerRef.current = window.setTimeout(() => {
+      startNewHand();
+    }, 10000);
+
+    return () => {
+      if (nextHandTimerRef.current) {
+        window.clearTimeout(nextHandTimerRef.current);
+        nextHandTimerRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handResult.status]);
+
+  /* ---------- role pick screen ---------- */
+
+  if (!seatedRole) {
+    const baseButton =
+      "w-full rounded-3xl border px-6 font-semibold transition-colors duration-200 hover:bg-gray-50 hover:border-gray-300";
+
+    const seatAs = (role: Role) => {
+      clearTimers();
+
+      setDealerOffset(Math.random() < 0.5 ? 0 : 1);
+      setHandId(0);
+      setStreet(0);
+
+      setChecked({ top: false, bottom: false });
+      setLastAggressor(null);
+      setLastToActAfterAggro(null);
+      setActionsThisStreet(0);
+
+      setActionLog([]);
+      actionLogRef.current = [];
+      setBetSize(2);
+
+      setGame({
+        stacks: { top: STARTING_STACK_BB, bottom: STARTING_STACK_BB },
+        bets: { top: 0, bottom: 0 },
+        pot: 0,
+      });
+
+      setHandResult({ status: "playing", winner: null, reason: null, message: "" });
+
+      setSeatedRole(role);
+    };
+
+    return (
+      <main className="flex min-h-screen items-center justify-center px-6">
+        <div className="w-full max-w-xl">
+          <h1 className="mb-8 text-center text-3xl font-bold">Take a seat</h1>
+
+          <div className="flex flex-col gap-4">
+            <button onClick={() => seatAs("student")} className={`${baseButton} py-10 text-xl`}>
+              Student
+            </button>
+            <button
+              onClick={() => seatAs("professional")}
+              className={`${baseButton} py-10 text-xl`}
+            >
+              Professional
+            </button>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  /* ---------- game view ---------- */
+
+  const dealerChipTop =
+    "absolute -bottom-3 -right-3 flex h-10 w-10 items-center justify-center rounded-full border bg-white text-[20px] font-bold text-black shadow-sm";
+  const dealerChipBottom =
+    "absolute -top-3 -left-3 flex h-10 w-10 items-center justify-center rounded-full border bg-white text-[20px] font-bold text-black shadow-sm";
+
+  const streetLabel = streetNameFromCount(street);
+
+  const facingBetBottom = currentFacingBet("bottom");
+  const bottomCallAmt = amountToCall("bottom");
+
+  const bottomMaxTo = roundToHundredth(game.stacks.bottom + game.bets.bottom);
+
+  const defaultTo =
+    street === 0
+      ? 2.5
+      : roundToHundredth((game.pot + game.bets.top + game.bets.bottom) * 0.5);
+
+  const safeBetSize = betSize === "" ? defaultTo : betSize;
+
+const viewingSnapshot =
+  logViewOffset === 0 ? null : handLogHistory[logViewOffset - 1];
+
+  const heroPosLabel = viewingSnapshot
+  ? viewingSnapshot.heroPos
+  : dealerSeat === "bottom" ? "SB/D" : "BB";
+
+const oppPosLabel = viewingSnapshot
+  ? viewingSnapshot.oppPos
+  : dealerSeat === "top" ? "SB/D" : "BB";
+
+const displayedActionLog = viewingSnapshot ? viewingSnapshot.log : actionLog;
+
+const displayedHistoryBoard = viewingSnapshot
+  ? viewingSnapshot.endedBoard
+  : [];
+
+  return (
+    <>
+      <ConfirmModal
+  open={showConfirm}
+  title="Change role?"
+  message="Are you sure you would like to change role? The game will stop and new cards will be dealt. If you reset, your stack sizes will also reset."
+  cancelText="Go back"
+  confirmText="Change role"
+  onCancel={() => setShowConfirm(false)}
+  onConfirm={() => {
+    clearTimers();
+    setShowConfirm(false);
+    setSeatedRole(null);
+    setCards(null);
+  }}
+/>
+
+<ConfirmModal
+  open={showResetConfirm}
+  title="Reset game?"
+  message="Are you sure? Stack sizes will be reset and the starting position will also reset."
+  cancelText="Go back"
+  confirmText="Reset game"
+  onCancel={() => setShowResetConfirm(false)}
+  onConfirm={() => {
+    setShowResetConfirm(false);
+    resetGame();
+  }}
+/>
+
+      <main className="flex min-h-screen items-center justify-center px-6">
+        <div className="w-full max-w-6xl">
+          <div className="mb-6 flex items-center justify-between">
+            <div>
+              <h1 className="text-2xl font-bold text-white">Seated</h1>
+              <div className="text-sm text-white opacity-80 tabular-nums">
+                Pot: {formatBB(roundToHundredth(game.pot + game.bets.top + game.bets.bottom))}{" "}
+                BB <span className="opacity-60">·</span> {streetLabel}{" "}
+                <span className="opacity-60">·</span>{" "}
+                <span className="opacity-90">
+                  {handResult.status === "playing"
+                    ? toAct === "bottom"
+                      ? "Your turn"
+                      : "Opponent thinking…"
+                    : "Hand ended (next hand in 10s)"}
+                </span>
+              </div>
+              {handResult.message ? (
+                <div className="mt-1 text-sm text-white opacity-90">{handResult.message}</div>
+              ) : null}
+            </div>
+
+            {handResult.status === "ended" &&
+ handResult.reason === "showdown" &&
+ showdownFirst === "top" ? (
+  <div className="mt-2 flex items-center gap-3 text-white">
+    <div className="text-sm opacity-80">Opponent showed. Your hand:</div>
+
+    <button
+      className="rounded-xl border border-white/20 bg-white/10 px-3 py-1 text-sm hover:bg-white/20"
+      onClick={() => setYouMucked(false)}
+    >
+      Show
+    </button>
+
+    <button
+      className="rounded-xl border border-white/20 bg-white/10 px-3 py-1 text-sm hover:bg-white/20"
+      onClick={() => setYouMucked(true)}
+    >
+      Don’t show
+    </button>
+  </div>
+) : null}
+
+            <div className="flex items-center gap-4">
+              <button
+                type="button"
+                onClick={() => setShowResetConfirm(true)}
+                className="text-sm text-white underline opacity-80 hover:opacity-100"
+              >
+                Reset game
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowConfirm(true)}
+                className="text-sm text-white underline opacity-80 hover:opacity-100"
+              >
+                Change role
+              </button>
+            </div>
+          </div>
+
+          {/* ACTION LOG pinned left + TABLE centered */}
+          <div className="relative mt-6 w-full">
+            {/* LEFT: ACTION LOG */}
+<div className="absolute -left-54 top-0 w-[500px] rounded-3xl border border-white/10 bg-black/20 p-4 text-white text-left">
+ {/* Header row (matches your target screenshot) */}
+<div className="mb-6 relative flex w-full items-center gap-4">
+  {/* arrows */}
+  <div className="flex items-center gap-2 shrink-0">
+    <button
+      type="button"
+      className="rounded border border-white/20 bg-white/10 px-2 py-0.5 text-xs hover:bg-white/20"
+      onClick={() => setLogViewOffset((o) => Math.min(o + 1, handLogHistory.length))}
+    >
+      ◀
+    </button>
+
+    <button
+      type="button"
+      className="rounded border border-white/20 bg-white/10 px-2 py-0.5 text-xs hover:bg-white/20"
+      onClick={() => setLogViewOffset((o) => Math.max(o - 1, 0))}
+    >
+      ▶
+    </button>
+  </div>
+
+  {/* Action + stacks: glued right after arrows */}
+  <div className="flex items-baseline gap-3 min-w-0">
+    <div className="text-sm font-semibold text-white whitespace-nowrap">Action</div>
+
+    <div className="text-xs font-normal text-white/70 tabular-nums whitespace-nowrap">
+      {viewingSnapshot
+        ? `You (${viewingSnapshot.heroPos}) ${formatBB(viewingSnapshot.heroStartStack)}bb · Opponent (${viewingSnapshot.oppPos}) ${formatBB(viewingSnapshot.oppStartStack)}bb`
+        : `You (${dealerSeat === "bottom" ? "SB" : "BB"}) ${formatBB(handStartStacks.bottom)}bb · Opponent (${dealerSeat === "top" ? "SB" : "BB"}) ${formatBB(handStartStacks.top)}bb`}
+    </div>
+  </div>
+
+  {/* Current hand pinned right */}
+  <div className="absolute right-4 top-1/2 -translate-y-1/2 text-xs text-white/70 tabular-nums whitespace-nowrap">
+  {`Hand #${
+  logViewOffset === 0
+    ? handId + 1
+    : (handLogHistory[logViewOffset - 1]?.handNo ?? handId) + 1
+}`}
+
+</div>
+</div>
+
+  {/* Snapshot extras (ONLY when viewing history) */}
+{viewingSnapshot ? (
+  <div className="mb-3 flex items-center gap-4">
+    <div className="text-xs text-white/70 whitespace-nowrap">
+      You had:{" "}
+      {renderActionText(
+        `${cardStr(viewingSnapshot.heroCards[0])} ${cardStr(viewingSnapshot.heroCards[1])}`
+      )}
+    </div>
+
+    <div className="flex items-center gap-2 min-w-0 overflow-hidden">
+      {displayedHistoryBoard.map((c, i) => (
+        <div key={i} className="scale-[0.75] origin-left shrink-0">
+          <CardTile card={c} />
+        </div>
+      ))}
+    </div>
+  </div>
+) : null}
+
+{/* Log list */}
+{displayedActionLog.length === 0 ? (
+  <div className="text-sm opacity-70">—</div>
+) : (
+  <div className="max-h-[calc(100vh-220px)] w-full overflow-auto pr-1">
+    <div className="w-full text-sm">
+      {displayedActionLog.slice(-30).map((a) => (
+        <div
+          key={a.id}
+          className="grid w-full grid-cols-[1fr_1fr_1fr] items-center py-2 leading-none"
+        >
+          <div
+            className="text-center text-xs uppercase tracking-wide text-white/60 -translate-x-4.5 leading-none"
+            style={{ paddingTop: "3px" }}
+          >
+            {a.street}
+          </div>
+
+          <div
+            className="text-center font-semibold text-white leading-none"
+            style={{ marginLeft: "-56px" }}
+          >
+            {a.seat === "bottom" ? `You (${heroPosLabel})` : `Opponent (${oppPosLabel})`}
+          </div>
+
+          <div className="text-center text-white/90 tabular-nums break-words leading-none">
+            {renderActionText(a.text)}
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+)}
+
+</div>
+
+            {/* CENTER: TABLE */}
+            <div className="mx-auto flex w-fit flex-col items-center gap-[92px]">
+              {/* TOP SEAT */}
+              <div className="relative h-[260px] w-[216px] translate-y-6 rounded-3xl border bg-black/50 text-center">
+                {dealerSeat === "top" && <div className={dealerChipTop}>D</div>}
+
+                <div className="absolute -bottom-14 left-1/2 -translate-x-1/2">
+                  <BetChip amount={game.bets.top} label={topLabel} />
+                </div>
+
+                <div className="flex h-full flex-col justify-center">
+                  <div className="-mt-3 text-sm uppercase text-white opacity-60">Opponent</div>
+                  <div className="mt-2 text-sm text-white">
+                    Stack:{" "}
+                    <span className="font-semibold tabular-nums">{formatBB(game.stacks.top)}bb</span>
+                  </div>
+
+                  <div className="mt-4 flex justify-center gap-3">
+                    {oppA && oppB ? (
+                      (handResult.status === "ended" && oppRevealed) ? (
+  <>
+    <CardTile card={oppA} />
+    <CardTile card={oppB} />
+  </>
+) : (
+  <>
+    <CardBack />
+    <CardBack />
+  </>
+)
+
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+
+              {/* BOARD (always current hand) */}
+<div className="flex h-40 items-center justify-center">
+  <div className="flex gap-3">
+    {board.slice(0, street).map((c, i) => (
+      <CardTile key={i} card={c} />
+    ))}
+  </div>
+</div>
+
+              {/* BOTTOM SEAT */}
+              <div className="relative h-[260px] w-[216px] -translate-y-6 rounded-3xl border bg-black/50 text-center">
+                {dealerSeat === "bottom" && <div className={dealerChipBottom}>D</div>}
+
+                <div className="absolute -top-14 left-1/2 -translate-x-1/2">
+                  <BetChip amount={game.bets.bottom} label={bottomLabel} />
+                </div>
+
+                <div className="flex h-full flex-col justify-center">
+                  <div className="text-sm uppercase text-white opacity-60">You</div>
+                  <div className="text-xl font-semibold capitalize text-white">{seatedRole}</div>
+
+                  <div className="mt-2 text-sm text-white">
+                    Stack:{" "}
+                    <span className="font-semibold tabular-nums">
+                      {formatBB(game.stacks.bottom)}bb
+                    </span>
+                  </div>
+
+                  <div className="mt-4 flex flex-col items-center gap-2">
+                 <div className="flex justify-center gap-3">
+                   {youC && youD ? (
+                    handResult.status === "ended" && youMucked ? (
+                     <>
+                      <CardBack />
+                      <CardBack />
+                    </>
+                  ) : (
+                    <>
+                      <CardTile card={youC} />
+                      <CardTile card={youD} />
+                    </>
+                  )
+                ) : null}
+              </div>
+
+  {heroHandRank && !(handResult.status === "ended" && youMucked) ? (
+    <div className="text-xs font-semibold text-white/80">
+      {heroHandRank}
+    </div>
+  ) : null}
+</div>
+
+
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ACTION PANEL (bottom-right) */}
+          {isBottomTurn && (
+            <div className="fixed bottom-6 right-6 z-50 flex w-[320px] flex-col gap-3">
+              <div className="rounded-2xl border bg-white p-3 text-black shadow-sm">
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="text-sm font-semibold">{facingBetBottom ? "Raise to" : "Bet to"}</div>
+                  <div className="text-sm font-bold tabular-nums">{formatBB(safeBetSize)} BB</div>
+                </div>
+
+                <div className="flex items-center gap-3 min-w-0">
+                  <input
+                    type="range"
+                    min={0}
+                    max={bottomMaxTo}
+                    step={0.01}
+                    value={betSize === "" ? 0 : betSize}
+                    onChange={(e) => setBetSizeRounded(Number(e.target.value))}
+                    className="w-full"
+                  />
+
+                  <input
+                    type="number"
+                    step="0.01"
+                    inputMode="decimal"
+                    value={betSize}
+                    placeholder="0"
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === "") setBetSize("");
+                      else setBetSize(val === "-" ? "" : Number(val));
+                    }}
+                    onBlur={() => {
+                      if (betSize === "") setBetSizeRounded(defaultTo);
+                      else setBetSizeRounded(betSize);
+                    }}
+                    className="w-24 rounded-xl border px-2 py-1 text-sm tabular-nums"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => actFold("bottom")}
+                  className="h-[64px] w-[100px] rounded-2xl border bg-white px-4 py-3 text-sm font-semibold text-black shadow-sm hover:bg-gray-100"
+                >
+                  Fold
+                </button>
+
+               <button
+  type="button"
+  onClick={() => {
+    if (facingBetBottom) actCall("bottom");
+    else actCheck("bottom");
+  }}
+  className="flex h-[64px] w-[100px] flex-col items-center justify-center rounded-2xl border bg-white px-4 py-3 text-sm font-semibold text-black shadow-sm hover:bg-gray-100"
+>
+  <div>{facingBetBottom ? "Call" : "Check"}</div>
+
+  {facingBetBottom && (
+    <div className="mt-0.5 text-xs font-bold tabular-nums">
+      {formatBB(bottomCallAmt)} BB
+    </div>
+  )}
+</button>
+
+
+                <button
+  type="button"
+  onClick={() => actBetRaiseTo("bottom", safeBetSize)}
+  className="flex h-[64px] w-[100px] flex-col items-center justify-center rounded-2xl border bg-white px-4 py-3 text-sm font-semibold text-black shadow-sm hover:bg-gray-100"
+>
+  <div className="text-sm leading-tight">
+    {facingBetBottom ? "Raise" : "Bet"}
+  </div>
+
+  <div className="mt-0.5 w-full text-center text-xs font-bold tabular-nums">
+    {formatBB(safeBetSize)} BB
+  </div>
+</button>
+              </div>
+            </div>
+          )}
+        </div>
+      </main>
+    </>
+  );
+}
+
+// Next time:
+// Change role text should reflect something more concise 
+// Make it compatible with ipad and iphone 
+
+// Ask Wilson if he would like to do marketing for this 
