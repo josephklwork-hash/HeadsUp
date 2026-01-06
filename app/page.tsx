@@ -1437,7 +1437,7 @@ const shouldAppendPot =
     text: finalText,
   };
 
-  setActionLog((prev) => {
+  setActionLog((prev: ActionLogItem[]) => {
     const next = [...prev, item];
     actionLogRef.current = next;
 
@@ -1987,20 +1987,17 @@ if (
     });
   }
 
+  // ✅ DEFINE THESE EARLY - BEFORE logAction calls
   const topBest5 = sortBest5ForDisplay(best5From7(top7));
   const bottomBest5 = sortBest5ForDisplay(best5From7(bottom7));
 
-  // Show order:
-  // - If there was betting on the river, the last aggressor on the river shows first.
-  // - If it was checked through, out-of-position (non-dealer) shows first.
+  // Show order logic
   const firstToShow: Seat = (showdownFirstOverride ?? streetBettor ?? nonDealerSeat) as Seat;
   const secondToShow: Seat = firstToShow === "top" ? "bottom" : "top";
   setShowdownFirst(firstToShow);
 
   const winner: Seat | "tie" = cmp > 0 ? "bottom" : cmp < 0 ? "top" : "tie";
 
-  // First player always shows.
-  // Second player shows iff they are the winner or it's a tie; otherwise second may muck.
   const secondShows = winner === "tie" || winner === secondToShow;
 
   const topShows = firstToShow === "top" || (secondToShow === "top" && secondShows);
@@ -2020,7 +2017,7 @@ if (
   setOppRevealed(topShows);
   setYouMucked(!bottomShows);
 
-  // Log actions in correct showdown order
+  // NOW you can use topBest5 and bottomBest5 in logAction
   logAction(
     firstToShow,
     `Shows ${(firstToShow === "top" ? topBest5 : bottomBest5).map(cardStr).join("\u00A0")}`
