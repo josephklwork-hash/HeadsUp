@@ -532,40 +532,6 @@ const [otherStudents, setOtherStudents] = useState<
   { firstName: string; lastName: string; year: string; major: string }[]
 >([]);
 
-useEffect(() => {
-  if (screen !== "dashboard" && screen !== "professionalDashboard") return;
-
-  setOtherStudents((prev) => {
-    if (prev.length > 1) return prev;
-
-    const mockStudents = Array.from({ length: 20 }).map(() => ({
-      firstName: "Joe",
-      lastName: "Joe",
-      year: "3",
-      major: "Economics",
-    }));
-
-    return [...prev, ...mockStudents];
-  });
-}, [screen]);
-
-useEffect(() => {
-  if (screen !== "dashboard" && screen !== "professionalDashboard") return;
-
-  setOtherProfessionals((prev) => {
-    if (prev.length > 0) return prev;
-
-    const mockProfessionals = Array.from({ length: 20 }).map(() => ({
-      firstName: "Joe",
-      lastName: "Joe",
-      company: "Sample Company",
-      workTitle: "Analyst",
-    }));
-
-    return mockProfessionals;
-  });
-}, [screen]);
-
 const [otherProfessionals, setOtherProfessionals] = useState<
   { firstName: string; lastName: string; company: string; workTitle: string }[]
 >([]);
@@ -1698,9 +1664,14 @@ const joinGame = () => {
         <div className="absolute right-0 mt-2 w-40 rounded-xl border bg-white shadow-md">
           <button
             type="button"
+
             onClick={() => {
   setStudentMenuOpen(false);
   resetGame();
+
+  setOtherStudents([]);
+  setOtherProfessionals([]);
+
   setStudentProfile({
     firstName: "",
     lastName: "",
@@ -1714,6 +1685,7 @@ const joinGame = () => {
   setSeatedRole(null);
   setScreen("role");
 }}
+
             className="w-full flex items-center px-4 py-2 text-left text-sm font-semibold text-black hover:bg-gray-100"
           >
             Log out
@@ -1754,6 +1726,10 @@ const joinGame = () => {
         type="button"
         onClick={() => {
   clearTimers();
+
+  setOtherStudents([]);
+  setOtherProfessionals([]);
+
   setSeatedRole(null);
   setScreen("studentProfile");
 }}
@@ -2386,9 +2362,11 @@ const displayedHistoryBoard = viewingSnapshot
   <button
     type="button"
     onClick={() => {
-      clearTimers();          // stop opponent + next-hand timers
-      setScreen("role");     // go back to title screen
-    }}
+  clearTimers();                 // stop opponent + next-hand timers
+  setOtherStudents([]);          // wipe mock students
+  setOtherProfessionals([]);     // wipe mock professionals
+  setScreen("role");             // go back to title screen
+}}
     className="text-sm text-white underline opacity-80 hover:opacity-100"
   >
     Title screen
