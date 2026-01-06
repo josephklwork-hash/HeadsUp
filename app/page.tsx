@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 /* ---------- types ---------- */
 
+type Role = "student" | "professional";
+
 type Screen =
   | "role"
   | "studentProfile"
