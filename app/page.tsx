@@ -1960,14 +1960,6 @@ if (
 
   }
 
-    function resolveShowdown(showdownFirstOverride: Seat | null = null) {
-  const top7 = [oppA!, oppB!, ...board] as Card[];
-  const bottom7 = [youC!, youD!, ...board] as Card[];
-
-  const topScore = evaluate7(top7);
-  const bottomScore = evaluate7(bottom7);
-  const cmp = compareScore(bottomScore, topScore);
-
   function resolveShowdown(showdownFirstOverride: Seat | null = null) {
   const top7 = [oppA!, oppB!, ...board] as Card[];
   const bottom7 = [youC!, youD!, ...board] as Card[];
@@ -2018,67 +2010,6 @@ if (
   setYouMucked(!bottomShows);
 
   // NOW you can use topBest5 and bottomBest5 in logAction
-  logAction(
-    firstToShow,
-    `Shows ${(firstToShow === "top" ? topBest5 : bottomBest5).map(cardStr).join("\u00A0")}`
-  );
-
-  if (secondShows) {
-    logAction(
-      secondToShow,
-      `Shows ${(secondToShow === "top" ? topBest5 : bottomBest5).map(cardStr).join("\u00A0")}`
-    );
-  } else {
-    logAction(secondToShow, secondToShow === "top" ? "Opponent mucked" : "You mucked");
-  }
-
-  const potTotal = formatBB(
-    roundToHundredth(gameRef.current.pot + gameRef.current.bets.top + gameRef.current.bets.bottom)
-  );
-
-  if (winner === "bottom") {
-    logAction("bottom", `Wins ${potTotal} BB ${bottomBest5.map(cardStr).join("\u00A0")}`);
-    endHand("bottom", "showdown", `You win ${potTotal} BB`);
-    return;
-  }
-
-  if (winner === "top") {
-    logAction("top", `Wins ${potTotal} BB ${topBest5.map(cardStr).join("\u00A0")}`);
-    endHand("top", "showdown", `Opponent wins ${potTotal} BB`);
-    return;
-  }
-
-  const halfPot = formatBB(
-    roundToHundredth(
-      (gameRef.current.pot + gameRef.current.bets.top + gameRef.current.bets.bottom) / 2
-    )
-  );
-
-  logAction("bottom", `Split pot ${halfPot} BB ${bottomBest5.map(cardStr).join("\u00A0")}`);
-  endHand("tie", "showdown", `Split pot ${halfPot} BB`);
-}
-
-  // Show order:
-  // - If there was betting on the river, the last aggressor on the river shows first.
-  // - If it was checked through, out-of-position (non-dealer) shows first.
-  const firstToShow: Seat = (showdownFirstOverride ?? streetBettor ?? nonDealerSeat) as Seat;
-  const secondToShow: Seat = firstToShow === "top" ? "bottom" : "top";
-  setShowdownFirst(firstToShow);
-
-  const winner: Seat | "tie" = cmp > 0 ? "bottom" : cmp < 0 ? "top" : "tie";
-
-  // First player always shows.
-  // Second player shows iff they are the winner or it’s a tie; otherwise second may muck.
-  const secondShows = winner === "tie" || winner === secondToShow;
-
-  const topShows = firstToShow === "top" || (secondToShow === "top" && secondShows);
-  const bottomShows = firstToShow === "bottom" || (secondToShow === "bottom" && secondShows);
-
-  // Control face-up cards in the UI
-  setOppRevealed(topShows);
-  setYouMucked(!bottomShows);
-
-  // Log actions in correct showdown order
   logAction(
     firstToShow,
     `Shows ${(firstToShow === "top" ? topBest5 : bottomBest5).map(cardStr).join("\u00A0")}`
