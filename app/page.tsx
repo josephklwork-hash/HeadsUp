@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState, useRef } from "react";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabaseClient";
 
+export const dynamic = 'force-dynamic';
+
 /* ---------- types ---------- */
 
 type Role = "student" | "professional";
