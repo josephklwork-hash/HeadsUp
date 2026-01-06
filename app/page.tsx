@@ -1264,12 +1264,12 @@ setJoinPinInput("");
 setGamePin(gameRow.pin);
 
 setGameId(gameRow.id);
-setMySeat("top");
 setMultiplayerActive(true);
 
 // enter the game screen + fresh reset
 clearTimers();
 resetGame();
+setMySeat("top");  // ← moved after resetGame
 setSeatedRole((prev) => prev ?? "student");
 setScreen("game");
 }
