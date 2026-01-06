@@ -923,7 +923,7 @@ useEffect(() => {
 
       if (payload.kind === "LOG_ACTION" && payload.item) {
         suppressMpRef.current = true;
-        setActionLog((prev) => {
+        setActionLog((prev: ActionLogItem[]) => {
           const next = [...prev, payload.item as ActionLogItem];
           actionLogRef.current = next;
           return next;
