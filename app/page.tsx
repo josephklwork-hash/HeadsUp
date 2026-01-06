@@ -2217,8 +2217,8 @@ endHand(
   }
 
   logAction(seat, "Checks");
-  setChecked((prev) => ({ ...prev, [seat]: true }));
-  setActionsThisStreet((n) => n + 1);
+  setChecked((prev: { top: boolean; bottom: boolean }) => ({ ...prev, [seat]: true }));
+  setActionsThisStreet((n: number) => n + 1);
 
   if (multiplayerActive && isHost && !suppressMpRef.current) {
     mpSend({
@@ -2345,7 +2345,7 @@ if (street !== 0 && callerWillBeAllIn && bettor) {
   roundToHundredth(game.pot + game.bets.top + game.bets.bottom + add)
 );
     setSawCallThisStreet(true);
-    setActionsThisStreet((n) => n + 1);
+    setActionsThisStreet((n: number) => n + 1);
 
     if (multiplayerActive && isHost && !suppressMpRef.current) {
       mpSend({
@@ -2480,7 +2480,7 @@ if (isFacing && roundToHundredth(target) === roundToHundredth(otherBet)) {
 
     setStreetBettor(seat);
 
-    setActionsThisStreet((n) => n + 1);
+    setActionsThisStreet((n: number) => n + 1);
     setChecked({ top: false, bottom: false });
 
     setLastAggressor(seat);
