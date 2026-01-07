@@ -842,6 +842,27 @@ if (payload.event === "ACTION") {
 
     // SYNC: reset / deal
     if (payload.event === "SYNC") {
+            if (payload.kind === "REQUEST_SNAPSHOT") {
+        // Only host responds with authoritative snapshot
+        if (!isHost) return;
+
+        mpSend({
+          event: "SYNC",
+          kind: "RESET",
+          dealerOffset,
+          gameSession,
+          handId,
+          game: gameRef.current,
+          toAct,
+          handStartStacks,
+          lastRaiseSize,
+          endedBoardSnapshot,
+          blindsPosted: blindsPostedRef.current,
+          cards,
+        });
+        return;
+      }
+
       if (
   payload.kind === "RESET" &&
   (payload.dealerOffset === 0 || payload.dealerOffset === 1) &&
@@ -1095,7 +1116,15 @@ if (payload.event === "ACTION") {
     }
   });
 
-  ch.subscribe();
+    ch.subscribe();
+
+     // Joiner requests a snapshot because it can miss early host broadcasts (POST_BLINDS/DEAL)
+  if (!isHost) {
+    window.setTimeout(() => {
+      mpSend({ event: "SYNC", kind: "REQUEST_SNAPSHOT" });
+    }, 150);
+  }
+
   mpChannelRef.current = ch;
 
   return () => {
@@ -2631,15 +2660,15 @@ if (isFacing && roundToHundredth(target) === roundToHundredth(otherBet)) {
   if (toAct !== seat) return; // ignore clicks while opponent is thinking
 
   if (multiplayerActive) {
-    // Host is authoritative: only host applies locally.
-    // Joiner only sends; it will be applied when received as ACTION.
-    if (isHost) {
-      applyActionFromSeat(seat, action);
-    } else {
-      mpSend({ event: "ACTION", seat, action });
-    }
+  // Joiner sends; host applies and drives SYNC.
+  if (!isHost) {
+    mpSend({ event: "ACTION", seat, action });
     return;
   }
+
+  applyActionFromSeat(seat, action);
+  return;
+}
 
   switch (action.type) {
     case "FOLD":
