@@ -1047,6 +1047,7 @@ useEffect(() => {
       if (payload.kind === "POST_BLINDS" && payload.game && payload.toAct) {
         suppressMpRef.current = true;
         setGame(payload.game as GameState);
+        gameRef.current = payload.game as GameState;
         setToAct(payload.toAct as Seat);
         suppressMpRef.current = false;
         return;
@@ -1788,14 +1789,17 @@ allInCallThisHandRef.current = false;
   /* post blinds at start of each hand */
   useEffect(() => {
     if (!seatedRole) return;
-    setHandStartStacks(gameRef.current.stacks);
+    
+    if (!multiplayerActive || isHost) {
+      setHandStartStacks(gameRef.current.stacks);
 
-    if (multiplayerActive && isHost && !suppressMpRef.current) {
-      mpSend({
-        event: "SYNC",
-        kind: "HAND_START_STACKS",
-        stacks: gameRef.current.stacks,
-      });
+      if (multiplayerActive && isHost && !suppressMpRef.current) {
+        mpSend({
+          event: "SYNC",
+          kind: "HAND_START_STACKS",
+          stacks: gameRef.current.stacks,
+        });
+      }
     }
 
     // reset per-hand state
