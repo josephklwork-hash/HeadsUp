@@ -46,6 +46,7 @@ type HandResult = {
 
 type ActionLogItem = {
   id: string;
+  sequence: number;
   street: StreetName;
   seat: Seat;
   text: string;
@@ -765,6 +766,7 @@ const [otherProfessionals, setOtherProfessionals] = useState<
   const blindsPostedRef = useRef(false);
   const gameRef = useRef(game);
   const streetRef = useRef<Street>(street);
+  const actionSequenceRef = useRef(0);
 
 useEffect(() => {
   gameRef.current = game;
@@ -850,11 +852,20 @@ useEffect(() => {
     gameSession: payload.gameSession as number,
     handId: payload.handId as number,
     game: payload.game as GameState,
+    toAct: payload.toAct as Seat,
+    handStartStacks: payload.handStartStacks as { top: number; bottom: number },
+    lastRaiseSize: payload.lastRaiseSize as number,
+    endedBoardSnapshot: payload.endedBoardSnapshot as number,
+    blindsPosted: payload.blindsPosted as boolean,
   });
   return;
 }
 
       if (payload.kind === "DEAL" && Array.isArray(payload.cards)) {
+        if (payload.handId !== handId || payload.gameSession !== gameSession) {
+          console.warn("Ignoring stale DEAL message");
+          return;
+        }
         suppressMpRef.current = true;
         setCards(payload.cards as Card[]);
         suppressMpRef.current = false;
@@ -926,7 +937,11 @@ useEffect(() => {
       if (payload.kind === "LOG_ACTION" && payload.item) {
         suppressMpRef.current = true;
         setActionLog((prev: ActionLogItem[]) => {
-          const next = [...prev, payload.item as ActionLogItem];
+          if (prev.some(item => item.id === payload.item.id)) {
+            return prev;
+          }
+          const next = [...prev, payload.item as ActionLogItem]
+            .sort((a, b) => a.sequence - b.sequence);
           actionLogRef.current = next;
           return next;
         });
@@ -1285,8 +1300,8 @@ setMultiplayerActive(true);
 
 // enter the game screen + fresh reset
 clearTimers();
+setMySeat("top");  // ← must be BEFORE resetGame so isHost is correct
 resetGame();
-setMySeat("top");  // ← moved after resetGame
 setSeatedRole((prev) => prev ?? "student");
 setScreen("game");
 }
@@ -1304,6 +1319,11 @@ function applyRemoteReset(p: {
   gameSession: number;
   handId: number;
   game: GameState;
+  toAct: Seat;
+  handStartStacks: { top: number; bottom: number };
+  lastRaiseSize: number;
+  endedBoardSnapshot: number;
+  blindsPosted: boolean;
 }) {
   suppressMpRef.current = true;
 
@@ -1340,7 +1360,12 @@ function applyRemoteReset(p: {
   setGameSession(p.gameSession);
   setHandId(p.handId);
   setDealerOffset(p.dealerOffset);
-  blindsPostedRef.current = false;
+  setToAct(p.toAct);
+  setHandStartStacks(p.handStartStacks);
+  setLastRaiseSize(p.lastRaiseSize);
+  setEndedBoardSnapshot(p.endedBoardSnapshot);
+  blindsPostedRef.current = p.blindsPosted;
+  actionSequenceRef.current = 0;
 
   suppressMpRef.current = false;
 }
@@ -1431,8 +1456,8 @@ function applyRemoteReset(p: {
       const timer = setTimeout(() => {
         const next = drawUniqueCards(9);
         setCards(next);
-        mpSend({ event: "SYNC", kind: "DEAL", cards: next });
-      }, 100);
+        mpSend({ event: "SYNC", kind: "DEAL", cards: next, handId, gameSession });
+      }, 250);
       
       return () => clearTimeout(timer);
     }
@@ -1456,6 +1481,7 @@ const shouldAppendPot =
 
   const item: ActionLogItem = {
     id: uid(),
+    sequence: actionSequenceRef.current++,
     street: streetNameFromCount(street),
     seat,
     text: finalText,
@@ -1582,16 +1608,20 @@ firstToAct,
 
   // If this hand ends the match, freeze here.
   if (shouldEndGame) {
-    gameOverRef.current = true; // immediate guard
-    setGameOver(true);          // UI state
-    clearTimers();              // extra safety
-
     if (multiplayerActive && isHost && !suppressMpRef.current) {
-      mpSend({
-        event: "SYNC",
-        kind: "GAME_OVER",
-      });
+      setTimeout(() => {
+        mpSend({
+          event: "SYNC",
+          kind: "GAME_OVER",
+        });
+      }, 100);
     }
+
+    setTimeout(() => {
+      gameOverRef.current = true;
+      setGameOver(true);
+      clearTimers();
+    }, multiplayerActive ? 150 : 0);
   }
 }
 
@@ -1607,6 +1637,7 @@ firstToAct,
     }
 
 allInCallThisHandRef.current = false;
+    actionSequenceRef.current = 0;
 
     setHandResult({ status: "playing", winner: null, reason: null, message: "" });
     setActionLog([]);
@@ -1663,6 +1694,7 @@ streetRef.current = 0;
     setHandResult({ status: "playing", winner: null, reason: null, message: "" });
     setActionLog([]);
     actionLogRef.current = [];
+    actionSequenceRef.current = 0;
     setStreet(0);
     setChecked({ top: false, bottom: false });
     setLastAggressor(null);
@@ -1689,6 +1721,11 @@ streetRef.current = 0;
   gameSession: next,
   handId: 0,
   game: freshGame,
+  toAct: nextDealerOffset === 0 ? "bottom" : "top",
+  handStartStacks: { top: STARTING_STACK_BB, bottom: STARTING_STACK_BB },
+  lastRaiseSize: BB,
+  endedBoardSnapshot: 0,
+  blindsPosted: false,
 });
 }
 
@@ -1814,14 +1851,16 @@ allInCallThisHandRef.current = false;
     setTimeout(() => {
   blindsPostedRef.current = false;
 
-  logAction(
-    "top",
-    dealerSeat === "top" ? `Posts SB ${formatBB(SB)}bb` : `Posts BB ${formatBB(BB)}bb`
-  );
-  logAction(
-    "bottom",
-    dealerSeat === "bottom" ? `Posts SB ${formatBB(SB)}bb` : `Posts BB ${formatBB(BB)}bb`
-  );
+  if (!multiplayerActive || isHost) {
+    logAction(
+      "top",
+      dealerSeat === "top" ? `Posts SB ${formatBB(SB)}bb` : `Posts BB ${formatBB(BB)}bb`
+    );
+    logAction(
+      "bottom",
+      dealerSeat === "bottom" ? `Posts SB ${formatBB(SB)}bb` : `Posts BB ${formatBB(BB)}bb`
+    );
+  }
 
   blindsPostedRef.current = true;
 
@@ -1977,14 +2016,16 @@ if (
     return;
   }
 
-    if (street < 5) {
-    const nextStreet: Street = street === 0 ? 3 : street === 3 ? 4 : 5;
-    resetStreetRound(nextStreet);
-  } else {
-    // River checked through (no betting): out-of-position shows first
-    const noBetOnRiver = bothChecked && streetBettor === null;
-    resolveShowdown(noBetOnRiver ? nonDealerSeat : null);
-  }
+   setTimeout(() => {
+      if (street < 5) {
+        const nextStreet: Street = street === 0 ? 3 : street === 3 ? 4 : 5;
+        resetStreetRound(nextStreet);
+      } else {
+        // River checked through (no betting): out-of-position shows first
+        const noBetOnRiver = bothChecked && streetBettor === null;
+        resolveShowdown(noBetOnRiver ? nonDealerSeat : null);
+      }
+    }, 50);
 }
 
   }
@@ -2024,6 +2065,10 @@ if (
   const topShows = firstToShow === "top" || (secondToShow === "top" && secondShows);
   const bottomShows = firstToShow === "bottom" || (secondToShow === "bottom" && secondShows);
 
+  // Control face-up cards in the UI
+  setOppRevealed(topShows);
+  setYouMucked(!bottomShows);
+
   if (multiplayerActive && isHost && !suppressMpRef.current) {
     mpSend({
       event: "SYNC",
@@ -2031,12 +2076,9 @@ if (
       topShows,
       bottomShows,
       winner,
+      showdownFirst: firstToShow,
     });
   }
-
-  // Control face-up cards in the UI
-  setOppRevealed(topShows);
-  setYouMucked(!bottomShows);
 
   // NOW you can use topBest5 and bottomBest5 in logAction
   logAction(
