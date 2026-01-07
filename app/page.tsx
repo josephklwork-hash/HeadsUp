@@ -860,6 +860,8 @@ if (payload.event === "ACTION") {
           blindsPosted: blindsPostedRef.current,
           cards,
           handLogHistory,
+          actionLog: actionLogRef.current,
+          actionSeq,
         });
         return;
       }
