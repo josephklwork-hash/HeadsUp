@@ -1345,11 +1345,13 @@ setJoinPinInput("");
 setGamePin(gameRow.pin);
 
 setGameId(gameRow.id);
+
+// IMPORTANT: set seat BEFORE enabling multiplayer so isHost is never true on joiner
+setMySeat("top");
 setMultiplayerActive(true);
 
 // enter the game screen and wait for host's RESET
 clearTimers();
-setMySeat("top");
 setSeatedRole((prev) => prev ?? "student");
 setScreen("game");
 }
