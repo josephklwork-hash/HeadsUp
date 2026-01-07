@@ -1116,6 +1116,16 @@ return;
         suppressMpRef.current = false;
         return;
       }
+      if (payload.kind === "HAND_LOG_SNAPSHOT" && payload.snapshot) {
+        suppressMpRef.current = true;
+        setHandLogHistory((prev) => {
+          const snap = payload.snapshot as HandLogSnapshot;
+          if (prev[0]?.handNo === snap.handNo) return prev;
+          return [snap, ...prev].slice(0, 30);
+        });
+        suppressMpRef.current = false;
+        return;
+      }
     }
   });
 
@@ -1666,7 +1676,24 @@ firstToAct,
     });
   }
 
-  setTimeout(() => snapshotCurrentHandLog(), 0);
+  setTimeout(() => {
+  snapshotCurrentHandLog();
+  
+  // Broadcast snapshot to joiner
+  if (multiplayerActive && isHost && !suppressMpRef.current) {
+    setTimeout(() => {
+      const currentHistory = handLogHistory;
+      const latestSnapshot = currentHistory[0];
+      if (latestSnapshot) {
+        mpSend({
+          event: "SYNC",
+          kind: "HAND_LOG_SNAPSHOT",
+          snapshot: latestSnapshot,
+        });
+      }
+    }, 50);
+  }
+}, 0);
 
   // If this hand ends the match, freeze here.
   if (shouldEndGame) {
