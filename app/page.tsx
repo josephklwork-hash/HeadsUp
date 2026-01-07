@@ -1472,37 +1472,48 @@ function applyRemoteReset(p: {
   const endedSt = endedStreetRef.current;
 
   setHandLogHistory((prev) => {
-  const snap: HandLogSnapshot = {
-  handNo: handId,
-  dealer: dealerSeat,
-  endedStreet: endedSt,
-  endedBoard: board.slice(0, endedSt),
-  log: actionLogRef.current,
+    const snap: HandLogSnapshot = {
+      handNo: handId,
+      dealer: dealerSeat,
+      endedStreet: endedSt,
+      endedBoard: board.slice(0, endedSt),
+      log: actionLogRef.current,
 
-  heroPos: dealerSeat === "bottom" ? "SB" : "BB",
-  oppPos: dealerSeat === "top" ? "SB" : "BB",
+      heroPos: dealerSeat === "bottom" ? "SB" : "BB",
+      oppPos: dealerSeat === "top" ? "SB" : "BB",
 
-  heroCards:
-    RANK_TO_VALUE[youC!.rank] >= RANK_TO_VALUE[youD!.rank]
-      ? [youC!, youD!]
-      : [youD!, youC!],
+      heroCards:
+        RANK_TO_VALUE[youC!.rank] >= RANK_TO_VALUE[youD!.rank]
+          ? [youC!, youD!]
+          : [youD!, youC!],
 
-  oppCards:
-    RANK_TO_VALUE[oppA!.rank] >= RANK_TO_VALUE[oppB!.rank]
-      ? [oppA!, oppB!]
-      : [oppB!, oppA!],
+      oppCards:
+        RANK_TO_VALUE[oppA!.rank] >= RANK_TO_VALUE[oppB!.rank]
+          ? [oppA!, oppB!]
+          : [oppB!, oppA!],
 
-  // Decide shown vs mucked from what actually got logged
-  oppShown: (() => {
-    const log = actionLogRef.current;
-    const mucked = log.some((it) => it.seat === "top" && /muck/i.test(it.text));
-    const showed = log.some((it) => it.seat === "top" && it.text.startsWith("Shows "));
-    return showed && !mucked;
-  })(),
+      // Decide shown vs mucked from what actually got logged
+      oppShown: (() => {
+        const log = actionLogRef.current;
+        const mucked = log.some((it) => it.seat === "top" && /muck/i.test(it.text));
+        const showed = log.some((it) => it.seat === "top" && it.text.startsWith("Shows "));
+        return showed && !mucked;
+      })(),
 
-  heroStartStack: handStartStacks.bottom,
-  oppStartStack: handStartStacks.top,
-};
+      heroStartStack: handStartStacks.bottom,
+      oppStartStack: handStartStacks.top,
+    };
+
+    // Broadcast to joiner IMMEDIATELY after creating snapshot
+    if (multiplayerActive && isHost && !suppressMpRef.current) {
+      setTimeout(() => {
+        mpSend({
+          event: "SYNC",
+          kind: "HAND_LOG_SNAPSHOT",
+          snapshot: snap,
+        });
+      }, 50);
+    }
 
     if (prev[0]?.handNo === snap.handNo) return prev;
     return [snap, ...prev].slice(0, 30);
@@ -1676,24 +1687,7 @@ firstToAct,
     });
   }
 
-  setTimeout(() => {
-  snapshotCurrentHandLog();
-  
-  // Broadcast snapshot to joiner
-  if (multiplayerActive && isHost && !suppressMpRef.current) {
-    setTimeout(() => {
-      const currentHistory = handLogHistory;
-      const latestSnapshot = currentHistory[0];
-      if (latestSnapshot) {
-        mpSend({
-          event: "SYNC",
-          kind: "HAND_LOG_SNAPSHOT",
-          snapshot: latestSnapshot,
-        });
-      }
-    }, 50);
-  }
-}, 0);
+  setTimeout(() => snapshotCurrentHandLog(), 0);
 
   // If this hand ends the match, freeze here.
   if (shouldEndGame) {
