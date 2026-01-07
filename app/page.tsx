@@ -1045,6 +1045,7 @@ useEffect(() => {
       }
 
       if (payload.kind === "POST_BLINDS" && payload.game && payload.toAct) {
+        console.log("POST_BLINDS received:", payload.game);
         suppressMpRef.current = true;
         setGame(payload.game as GameState);
         gameRef.current = payload.game as GameState;
