@@ -882,6 +882,7 @@ if (payload.event === "ACTION") {
   lastRaiseSize: payload.lastRaiseSize as number,
   endedBoardSnapshot: payload.endedBoardSnapshot as number,
   blindsPosted: payload.blindsPosted as boolean,
+  cards: (Array.isArray(payload.cards) ? (payload.cards as Card[]) : null),
   actionLog: (payload.actionLog as ActionLogItem[]) ?? [],
   actionSeq: (payload.actionSeq as number) ?? 0,
 });
