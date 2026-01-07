@@ -681,16 +681,15 @@ const setStreetBettor = (next: any) =>
   const suppressMpRef = useRef(false);
 
   function mpSend(payload: any) {
-    if (!multiplayerActive) return;
-    const ch = mpChannelRef.current;
-    if (!ch) return;
+  const ch = mpChannelRef.current;
+  if (!ch) return;
 
-    ch.send({
-      type: "broadcast",
-      event: "mp",
-      payload: { ...payload, sender: sbUser?.id ?? null },
-    });
-  }
+  ch.send({
+    type: "broadcast",
+    event: "mp",
+    payload: { ...payload, sender: sbUser?.id ?? null },
+  });
+}
 
   function applyActionFromSeat(seat: Seat, action: GameAction) {
     // remote actions must bypass local click gating
@@ -818,7 +817,7 @@ useEffect(() => {
   setMultiplayerActive(true);
   clearTimers();
 
-  // Only the host initializes the game state (dealerOffset/cards/handId/gameSession).
+  // Only host initializes dealerOffset/handId/gameSession/cards/blinds.
   if (isHost) {
     resetGame();
   }
@@ -1741,22 +1740,20 @@ setCards(nextCards);
     setGameSession((s: number) => {
   const next = s + 1;
 
-  if (multiplayerActive && isHost && !suppressMpRef.current) {
-    mpSend({
-  event: "SYNC",
-  kind: "RESET",
-  dealerOffset: nextDealerOffset,
-  gameSession: next,
-  handId: 0,
-  game: freshGame,
-  toAct: nextDealerOffset === 0 ? "bottom" : "top",
-  handStartStacks: { top: STARTING_STACK_BB, bottom: STARTING_STACK_BB },
-  lastRaiseSize: BB,
-  endedBoardSnapshot: 0,
-  blindsPosted: false,
-  cards: nextCards,
-});
-
+  if (isHost && !suppressMpRef.current) {
+  mpSend({
+    event: "SYNC",
+    kind: "RESET",
+    dealerOffset: nextDealerOffset,
+    gameSession: next,
+    handId: 0,
+    game: freshGame,
+    toAct: nextDealerOffset === 0 ? "bottom" : "top",
+    handStartStacks: { top: STARTING_STACK_BB, bottom: STARTING_STACK_BB },
+    lastRaiseSize: BB,
+    endedBoardSnapshot: 0,
+    blindsPosted: false,
+  });
 }
 
   return next;
@@ -1827,13 +1824,13 @@ useEffect(() => {
   if (!multiplayerActive || isHost) {
     setHandStartStacks(gameRef.current.stacks);
 
-      if (multiplayerActive && isHost && !suppressMpRef.current) {
-        mpSend({
-          event: "SYNC",
-          kind: "HAND_START_STACKS",
-          stacks: gameRef.current.stacks,
-        });
-      }
+      if (isHost && !suppressMpRef.current) {
+  mpSend({
+    event: "SYNC",
+    kind: "HAND_START_STACKS",
+    stacks: gameRef.current.stacks,
+  });
+}
     }
 
     // reset per-hand state
@@ -1872,14 +1869,14 @@ useEffect(() => {
           },
         };
 
-        if (multiplayerActive && isHost && !suppressMpRef.current) {
-          mpSend({
-            event: "SYNC",
-            kind: "POST_BLINDS",
-            game: nextGame,
-            toAct: dealerSeat,
-          });
-        }
+        if (isHost && !suppressMpRef.current) {
+  mpSend({
+    event: "SYNC",
+    kind: "POST_BLINDS",
+    game: nextGame,
+    toAct: dealerSeat,
+  });
+}
 
         return nextGame;
       });
@@ -1904,12 +1901,12 @@ useEffect(() => {
 
   blindsPostedRef.current = true;
 
-  if (multiplayerActive && isHost && !suppressMpRef.current) {
-    mpSend({
-      event: "SYNC",
-      kind: "BLINDS_POSTED",
-    });
-  }
+  if (isHost && !suppressMpRef.current) {
+  mpSend({
+    event: "SYNC",
+    kind: "BLINDS_POSTED",
+  });
+}
 }, 0);
 
     setBetSize(2);
@@ -2276,7 +2273,7 @@ function cards5Str(cards5: Card[]) {
   function actFold(seat: Seat) {
     if (handResult.status !== "playing") return;
 
-    if (multiplayerActive && !isHost && !suppressMpRef.current) {
+    if (multiplayerActive && isHost && !suppressMpRef.current) {
   mpSend({ event: "ACTION", seat, action: { type: "FOLD" } });
 }
 
@@ -2323,7 +2320,7 @@ endHand(
   if (handResult.status !== "playing") return;
   if (!canCheck(seat)) return;
 
-  if (multiplayerActive && !isHost && !suppressMpRef.current) {
+  if (multiplayerActive && isHost && !suppressMpRef.current) {
   mpSend({ event: "ACTION", seat, action: { type: "CHECK" } });
 }
 
@@ -2364,7 +2361,7 @@ setToAct(other);
   function actCall(seat: Seat) {
   if (handResult.status !== "playing") return;
 
-   if (multiplayerActive && !isHost && !suppressMpRef.current) {
+   if (multiplayerActive && isHost && !suppressMpRef.current) {
   mpSend({ event: "ACTION", seat, action: { type: "CALL" } });
 }
 
@@ -2509,7 +2506,7 @@ if (street === 5 && currentFacingBet(seat)) {
   function actBetRaiseTo(seat: Seat, targetTotalBet: number) {
   if (handResult.status !== "playing") return;
 
-    if (multiplayerActive && !isHost && !suppressMpRef.current) {
+    if (multiplayerActive && isHost && !suppressMpRef.current) {
   mpSend({ event: "ACTION", seat, action: { type: "BET_RAISE_TO", to: targetTotalBet } });
 }
 
@@ -2634,16 +2631,15 @@ if (isFacing && roundToHundredth(target) === roundToHundredth(otherBet)) {
   if (toAct !== seat) return; // ignore clicks while opponent is thinking
 
   if (multiplayerActive) {
-  // Joiner sends actions to host; host runs the engine and broadcasts SYNC.
-  if (!isHost) {
-    mpSend({ event: "ACTION", seat, action });
+    // Host is authoritative: only host applies locally.
+    // Joiner only sends; it will be applied when received as ACTION.
+    if (isHost) {
+      applyActionFromSeat(seat, action);
+    } else {
+      mpSend({ event: "ACTION", seat, action });
+    }
     return;
   }
-
-  // Host can apply its own actions immediately.
-  applyActionFromSeat(seat, action);
-  return;
-}
 
   switch (action.type) {
     case "FOLD":
