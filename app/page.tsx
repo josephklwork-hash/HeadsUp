@@ -4,6 +4,10 @@ import { useEffect, useMemo, useState, useRef } from "react";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabaseClient";
 
+import { MultiplayerHost } from "./multiplayerHost";
+import { MultiplayerJoiner } from "./multiplayerJoiner";
+import type { HostState, GameAction } from "./multiplayerHost";
+
 export const dynamic = 'force-dynamic';  // ← THIS LINE
 
 /* ---------- types ---------- */
@@ -675,21 +679,15 @@ const setStreetBettor = (next: any) =>
   const [mySeat, setMySeat] = useState<Seat>("bottom");
   const [multiplayerActive, setMultiplayerActive] = useState(false);
 
-  const mpChannelRef = useRef<any>(null);
+  // Store the multiplayer controllers
+const [mpHost, setMpHost] = useState<MultiplayerHost | null>(null);
+const [mpJoiner, setMpJoiner] = useState<MultiplayerJoiner | null>(null);
+
+// Store the multiplayer state (received from host or from local host controller)
+const [mpState, setMpState] = useState<HostState | null>(null);
 
     const isHost = mySeat === "bottom";
   const suppressMpRef = useRef(false);
-
-  function mpSend(payload: any) {
-  const ch = mpChannelRef.current;
-  if (!ch) return;
-
-  ch.send({
-    type: "broadcast",
-    event: "mp",
-    payload: { ...payload, sender: sbUser?.id ?? null },
-  });
-}
 
   function applyActionFromSeat(seat: Seat, action: GameAction) {
     // remote actions must bypass local click gating
@@ -790,370 +788,90 @@ useEffect(() => {
   })();
 }, []);
 
+// Watch for game status changes (for host waiting for joiner)
 useEffect(() => {
   if (!gameId) return;
+  if (multiplayerActive) return; // Already active, no need to watch
+  if (!gamePin) return; // Not in a PIN game
+  if (mySeat !== "bottom") return; // Only host needs this
 
-  // Clean up any prior channel
-  if (mpChannelRef.current) {
-    supabase.removeChannel(mpChannelRef.current);
-    mpChannelRef.current = null;
-  }
+  // Poll for game becoming active
+  const interval = setInterval(async () => {
+    const { data } = await supabase
+      .from("games")
+      .select("status")
+      .eq("id", gameId)
+      .single();
+
+    if (data?.status === "active") {
+      console.log("Game became active - joiner joined!");
+      clearInterval(interval);
+      setMultiplayerActive(true);
+      setSeatedRole((prev) => prev ?? "student");
+      setScreen("game");
+    }
+  }, 1000);
+
+  return () => clearInterval(interval);
+}, [gameId, multiplayerActive, gamePin, mySeat]);
+
+useEffect(() => {
+  if (!gameId) return;
+  if (!multiplayerActive) return;
 
   const ch = supabase.channel(`game:${gameId}`);
 
-  // When the joiner updates games.status to "active", the host should enter the game
-  ch.on(
-    "postgres_changes",
-    {
-      event: "UPDATE",
-      schema: "public",
-      table: "games",
-      filter: `id=eq.${gameId}`,
-    },
-    (payload: any) => {
-      const nextStatus = payload?.new?.status;
-
-      if (nextStatus === "active") {
-  setMultiplayerActive(true);
-  clearTimers();
-
-  // Only host initializes dealerOffset/handId/gameSession/cards/blinds.
-  if (isHost) {
-    resetGame();
-  }
-
-  setSeatedRole((prev) => prev ?? "student");
-  setScreen("game");
-}
-    }
-  );
-
-    // realtime action + sync
-  ch.on("broadcast", { event: "mp" }, ({ payload }: any) => {
-    if (!payload) return;
-    if (payload.sender && payload.sender === (sbUser?.id ?? null)) return;
-
-    // ACTION: only the host applies actions (host is authoritative)
-if (payload.event === "ACTION") {
-  if (!isHost) return;
-  applyActionFromSeat(payload.seat as Seat, payload.action as GameAction);
-  return;
-}
-
-    // SYNC: reset / deal
-    if (payload.event === "SYNC") {
-            if (payload.kind === "REQUEST_SNAPSHOT") {
-        // Only host responds with authoritative snapshot
-        if (!isHost) return;
-
-        mpSend({
-          event: "SYNC",
-          kind: "RESET",
-          dealerOffset,
-          gameSession,
-          handId,
-          game: gameRef.current,
-          toAct,
-          handStartStacks,
-          lastRaiseSize,
-          endedBoardSnapshot,
-          blindsPosted: blindsPostedRef.current,
-          cards,
-          handLogHistory,
-          actionLog: actionLogRef.current,
-        });
-        return;
-      }
-
-      if (
-  payload.kind === "RESET" &&
-  (payload.dealerOffset === 0 || payload.dealerOffset === 1) &&
-  Number.isFinite(payload.gameSession) &&
-  Number.isFinite(payload.handId) &&
-  payload.game &&
-  payload.game.stacks &&
-  payload.game.bets
-) {
-    applyRemoteReset({
-  dealerOffset: payload.dealerOffset as 0 | 1,
-  gameSession: payload.gameSession as number,
-  handId: payload.handId as number,
-  game: payload.game as GameState,
-  toAct: payload.toAct as Seat,
-  handStartStacks: payload.handStartStacks as { top: number; bottom: number },
-  lastRaiseSize: payload.lastRaiseSize as number,
-  endedBoardSnapshot: payload.endedBoardSnapshot as number,
-  blindsPosted: payload.blindsPosted as boolean,
-  cards: (Array.isArray(payload.cards) ? (payload.cards as Card[]) : null),
-  actionLog: (payload.actionLog as ActionLogItem[]) ?? [],
-  actionSeq: (payload.actionSeq as number) ?? 0,
+  // Subscribe to channel
+  ch.subscribe((status) => {
+    console.log('Channel status:', status);
+    
+    if (status === 'SUBSCRIBED') {
+      console.log('Successfully subscribed to game channel');
+      
+      // Initialize the appropriate controller
+      if (isHost) {
+        // HOST: Create host controller
+        const host = new MultiplayerHost(ch, sbUser?.id ?? 'host', dealerOffset, () => {
+  // When controller processes joiner's action, update host's display
+  setMpState(JSON.parse(JSON.stringify(host.getState())));
 });
-
-// Also sync hand history from host
-if (Array.isArray(payload.handLogHistory)) {
-  suppressMpRef.current = true;
-  setHandLogHistory(payload.handLogHistory as HandLogSnapshot[]);
-  suppressMpRef.current = false;
-}
-
-return;
-}
-
-     if (payload.kind === "DEAL" && Array.isArray(payload.cards)) {
-  suppressMpRef.current = true;
-  setCards(payload.cards as Card[]);
-  suppressMpRef.current = false;
-  return;
-}
-
-      if (payload.kind === "STREET_ADVANCE" && typeof payload.nextStreet === "number" && payload.firstToAct) {
-        suppressMpRef.current = true;
-        resetStreetRound(payload.nextStreet as Street);
-        suppressMpRef.current = false;
-        return;
-      }
-
-      if (payload.kind === "PULL_BETS" && payload.game) {
-        suppressMpRef.current = true;
-        setGame(payload.game as GameState);
-        suppressMpRef.current = false;
-        return;
-      }
-
-      if (payload.kind === "END_HAND" && payload.stacks) {
-        suppressMpRef.current = true;
-        setGame((prev: GameState) => ({
-          pot: 0,
-          bets: { top: 0, bottom: 0 },
-          stacks: payload.stacks as GameState["stacks"],
-        }));
-        suppressMpRef.current = false;
-        return;
-      }
-
-      if (payload.kind === "NEW_HAND") {
-        suppressMpRef.current = true;
-        startNewHand();
-        suppressMpRef.current = false;
-        return;
-      }
-
-      if (payload.kind === "SET_TO_ACT" && payload.toAct) {
-        suppressMpRef.current = true;
-        setToAct(payload.toAct as Seat);
-        suppressMpRef.current = false;
-        return;
-      }
-
-      if (payload.kind === "FOLD_END" && payload.winner && typeof payload.endedStreet === "number") {
-        suppressMpRef.current = true;
-        endedStreetRef.current = payload.endedStreet as Street;
-        setEndedBoardSnapshot(payload.endedStreet as Street);
-        suppressMpRef.current = false;
-        return;
-      }
-
-      if (payload.kind === "ALL_IN_RUNOUT") {
-        suppressMpRef.current = true;
-        setStreet(5);
-        suppressMpRef.current = false;
-        return;
-      }
-
-      if (payload.kind === "SHOWDOWN" && typeof payload.topShows === "boolean" && typeof payload.bottomShows === "boolean" && payload.winner) {
-        suppressMpRef.current = true;
-        setOppRevealed(payload.topShows);
-        setYouMucked(!payload.bottomShows);
-        suppressMpRef.current = false;
-        return;
-      }
-
-      if (payload.kind === "LOG_ACTION" && payload.item) {
-        suppressMpRef.current = true;
-        setActionLog((prev: ActionLogItem[]) => {
-          if (prev.some(item => item.id === payload.item.id)) {
-            return prev;
+        setMpHost(host);
+        
+        // Start the first hand after a delay (let joiner connect)
+        setTimeout(() => {
+          host.startHand();
+          // Update our own display with host's state
+          setMpState(JSON.parse(JSON.stringify(host.getState())));
+        }, 500);
+        
+      } else {
+        // JOINER: Create joiner controller
+        const joiner = new MultiplayerJoiner(
+          ch, 
+          sbUser?.id ?? 'joiner',
+          (state: HostState) => {
+            // When we receive state from host, update our display
+            setMpState(state);
           }
-          const next = [...prev, payload.item as ActionLogItem]
-            .sort((a, b) => a.sequence - b.sequence);
-          actionLogRef.current = next;
-          return next;
-        });
-        suppressMpRef.current = false;
-        return;
-      }
-
-      if (payload.kind === "HAND_RESULT" && payload.handResult) {
-        suppressMpRef.current = true;
-        setHandResult(payload.handResult as HandResult);
-        suppressMpRef.current = false;
-        return;
-      }
-
-      if (payload.kind === "SET_CHECKED" && payload.seat && typeof payload.actionsThisStreet === "number") {
-        suppressMpRef.current = true;
-        setChecked((prev: { top: boolean; bottom: boolean }) => ({ ...prev, [payload.seat as Seat]: true }));
-        setActionsThisStreet(payload.actionsThisStreet);
-        suppressMpRef.current = false;
-        return;
-      }
-
-      if (payload.kind === "SAW_CALL" && typeof payload.actionsThisStreet === "number") {
-        suppressMpRef.current = true;
-        setSawCallThisStreet(true);
-        setActionsThisStreet(payload.actionsThisStreet);
-        suppressMpRef.current = false;
-        return;
-      }
-
-      if (payload.kind === "SET_AGGRESSOR" && payload.lastAggressor && payload.lastToActAfterAggro && typeof payload.actionsThisStreet === "number" && typeof payload.lastRaiseSize === "number" && payload.streetBettor) {
-        suppressMpRef.current = true;
-        setLastAggressor(payload.lastAggressor as Seat);
-        setLastToActAfterAggro(payload.lastToActAfterAggro as Seat);
-        setActionsThisStreet(payload.actionsThisStreet);
-        setLastRaiseSize(payload.lastRaiseSize);
-        setStreetBettor(payload.streetBettor as Seat);
-        setChecked({ top: false, bottom: false });
-        suppressMpRef.current = false;
-        return;
-      }
-
-      if (payload.kind === "RESET_STREET" && typeof payload.nextStreet === "number" && payload.firstToAct) {
-        suppressMpRef.current = true;
-        setStreet(payload.nextStreet as Street);
-        setChecked({ top: false, bottom: false });
-        setLastAggressor(null);
-        setLastToActAfterAggro(null);
-        setActionsThisStreet(0);
-        setStreetBettor(null);
-        setSawCallThisStreet(false);
-        setLastRaiseSize(BB);
-        setToAct(payload.firstToAct as Seat);
-        suppressMpRef.current = false;
-        return;
-      }
-
-      if (payload.kind === "SET_SHOWDOWN_FIRST" && payload.showdownFirst) {
-        suppressMpRef.current = true;
-        setShowdownFirst(payload.showdownFirst as Seat);
-        suppressMpRef.current = false;
-        return;
-      }
-
-      if (payload.kind === "GAME_OVER") {
-        suppressMpRef.current = true;
-        gameOverRef.current = true;
-        setGameOver(true);
-        clearTimers();
-        suppressMpRef.current = false;
-        return;
-      }
-
-      if (payload.kind === "CLEAR_LAST_TO_ACT") {
-        suppressMpRef.current = true;
-        setLastToActAfterAggro(null);
-        suppressMpRef.current = false;
-        return;
-      }
-
-      if (payload.kind === "STREET_COMPLETE" && typeof payload.street === "number") {
-        suppressMpRef.current = true;
-        pullBetsIntoPot();
-        suppressMpRef.current = false;
-        return;
-      }
-
-      if (payload.kind === "SET_ENDED_SNAPSHOT" && typeof payload.endedBoardSnapshot === "number") {
-        suppressMpRef.current = true;
-        endedStreetRef.current = payload.endedBoardSnapshot as Street;
-        setEndedBoardSnapshot(payload.endedBoardSnapshot as Street);
-        suppressMpRef.current = false;
-        return;
-      }
-
-      if (payload.kind === "HAND_START_STACKS" && payload.stacks) {
-        suppressMpRef.current = true;
-        setHandStartStacks(payload.stacks as GameState["stacks"]);
-        suppressMpRef.current = false;
-        return;
-      }
-
-      if (payload.kind === "POST_BLINDS" && payload.game && payload.toAct) {
-  suppressMpRef.current = true;
-
-  // reset per-hand state (joiner mirrors host)
-  setHandResult({ status: "playing", winner: null, reason: null, message: "" });
-  allInCallThisHandRef.current = false;
-  setActionLog([]);
-  actionLogRef.current = [];
-  setStreet(0);
-  setChecked({ top: false, bottom: false });
-  setLastAggressor(null);
-  setLastToActAfterAggro(null);
-  setSawCallThisStreet(false);
-  setActionsThisStreet(0);
-  setLastRaiseSize(BB);
-  blindsPostedRef.current = false;
-  setBetSize(2);
-
-  // apply the posted-blinds chip state + whose turn it is
-  setGame(payload.game as GameState);
-  gameRef.current = payload.game as GameState;
-  setToAct(payload.toAct as Seat);
-
-  suppressMpRef.current = false;
-  return;
-}
-
-      if (payload.kind === "BLINDS_POSTED") {
-        suppressMpRef.current = true;
-        blindsPostedRef.current = true;
-        suppressMpRef.current = false;
-        return;
-      }
-
-      if (payload.kind === "SET_HAND_ID" && typeof payload.handId === "number") {
-        suppressMpRef.current = true;
-        setHandId(payload.handId);
-        suppressMpRef.current = false;
-        return;
-      }
-
-      if (payload.kind === "ALL_IN_CALL_FLAG") {
-        suppressMpRef.current = true;
-        allInCallThisHandRef.current = true;
-        suppressMpRef.current = false;
-        return;
-      }
-      if (payload.kind === "HAND_LOG_SNAPSHOT" && payload.snapshot) {
-        suppressMpRef.current = true;
-        setHandLogHistory((prev) => {
-          const snap = payload.snapshot as HandLogSnapshot;
-          if (prev[0]?.handNo === snap.handNo) return prev;
-          return [snap, ...prev].slice(0, 30);
-        });
-        suppressMpRef.current = false;
-        return;
+        );
+        setMpJoiner(joiner);
       }
     }
   });
 
-    ch.subscribe();
-
-     // Joiner requests a snapshot because it can miss early host broadcasts (POST_BLINDS/DEAL)
-  if (!isHost) {
-    window.setTimeout(() => {
-      mpSend({ event: "SYNC", kind: "REQUEST_SNAPSHOT" });
-    }, 150);
-  }
-
-  mpChannelRef.current = ch;
-
   return () => {
+    // Cleanup
+    if (mpHost) {
+      mpHost.destroy();
+      setMpHost(null);
+    }
+    if (mpJoiner) {
+      mpJoiner.destroy();
+      setMpJoiner(null);
+    }
     supabase.removeChannel(ch);
-    mpChannelRef.current = null;
   };
-}, [gameId, sbUser?.id]);
+}, [gameId, multiplayerActive, isHost, sbUser?.id]);
 
 useEffect(() => {
   let mounted = true;
@@ -1173,70 +891,47 @@ useEffect(() => {
   };
 }, []);
 
-useEffect(() => {
-  if (screen !== "role") return;
-  if (!gamePin) return;
-  if (joinMode) return;
-
-  let cancelled = false;
-
-  const interval = window.setInterval(async () => {
-    try {
-      const { data, error } = await supabase
-        .from("games")
-        .select("status")
-        .eq("pin", gamePin)
-        .single();
-
-      if (cancelled) return;
-      if (error || !data) return;
-
-      if (data.status === "active") {
-  window.clearInterval(interval);
-
-  setMultiplayerActive(true);
-
-  // creator enters game once someone joins
-  clearTimers();
-  resetGame();
-  setSeatedRole((prev) => prev ?? "student");
-  setScreen("game");
-}
-
-    } catch {
-      // ignore transient network errors
-    }
-  }, 800);
-
-  return () => {
-    cancelled = true;
-    window.clearInterval(interval);
-  };
-}, [screen, gamePin, joinMode]);
-
-  const dealerSeat: Seat = useMemo(
-    () => ((handId + dealerOffset) % 2 === 0 ? "top" : "bottom"),
-    [handId, dealerOffset]
-  );
+  const dealerSeat: Seat = useMemo(() => {
+  if (multiplayerActive && mpState) {
+    return mpState.dealerSeat;
+  }
+  return ((handId + dealerOffset) % 2 === 0 ? "top" : "bottom");
+}, [handId, dealerOffset, multiplayerActive, mpState]);
 
   const nonDealerSeat: Seat = dealerSeat === "top" ? "bottom" : "top";
+
+  // Display variables - use mpState when in multiplayer, otherwise use local state
+const displayGame = multiplayerActive && mpState ? mpState.game : game;
+const displayToAct = multiplayerActive && mpState ? mpState.toAct : toAct;
+const displayCards = multiplayerActive && mpState ? mpState.cards : cards;
+const displayActionLog = multiplayerActive && mpState ? mpState.actionLog : actionLog;
+const displayHandResult = multiplayerActive && mpState ? mpState.handResult : handResult;
+const displayStreet = multiplayerActive && mpState ? mpState.street : street;
+const displayOppRevealed = multiplayerActive && mpState ? mpState.oppRevealed : oppRevealed;
+const displayYouMucked = multiplayerActive && mpState ? mpState.youMucked : youMucked;
 
   // Perspective helpers: map game seats to screen positions
   const myActualSeat = mySeat; // "bottom" for host, "top" for joiner
   const oppActualSeat: Seat = mySeat === "bottom" ? "top" : "bottom";
   
   // Game state from my perspective
-  const myStack = game.stacks[myActualSeat];
-  const oppStack = game.stacks[oppActualSeat];
-  const myBet = game.bets[myActualSeat];
-  const oppBet = game.bets[oppActualSeat];
+  const myStack = displayGame.stacks[myActualSeat];
+const oppStack = displayGame.stacks[oppActualSeat];
+  const myBet = displayGame.bets[myActualSeat];
+const oppBet = displayGame.bets[oppActualSeat];
   
   const amIDealer = dealerSeat === myActualSeat;
+console.log('DEBUG - handId:', handId, 'dealerOffset:', dealerOffset, 'dealerSeat:', dealerSeat);
+console.log('DEBUG - myActualSeat:', myActualSeat, 'oppActualSeat:', oppActualSeat, 'amIDealer:', amIDealer);
+console.log('DEBUG - game.bets:', game.bets, 'myBet:', myBet, 'oppBet:', oppBet);
+console.log('DEBUG - toAct:', toAct, 'mySeat:', mySeat, 'myTurn:', toAct === mySeat, 'isBottomTurn:', toAct === mySeat && handResult.status === "playing");
   const myPositionLabel = amIDealer ? "SB/D" : "BB";
   const oppPositionLabel = amIDealer ? "BB" : "SB/D";
   
   const myLabel = amIDealer ? "SB" : "BB";
   const oppLabel = amIDealer ? "BB" : "SB";
+
+  const isBottomTurn = seatedRole && displayToAct === mySeat && displayHandResult.status === "playing";
 
   const [handStartStacks, setHandStartStacks] = useState<{ top: number; bottom: number }>({
   top: STARTING_STACK_BB,
@@ -1310,8 +1005,12 @@ setGameId(gameRow.id);
 setMySeat("bottom");
 setMultiplayerActive(false);
 
+// Randomize dealer offset once when creating the game
+const initialDealerOffset: 0 | 1 = Math.random() < 0.5 ? 0 : 1;
+setDealerOffset(initialDealerOffset);
+
 // stay on title screen to show the PIN screen
-return;  
+return;
 
   }
 
@@ -1421,8 +1120,6 @@ function applyRemoteReset(p: {
   setCards(p.cards);
 
   setHandResult({ status: "playing", winner: null, reason: null, message: "" });
-  setActionLog([]);
-  actionLogRef.current = [];
   setStreet(0);
   setChecked({ top: false, bottom: false });
   setLastAggressor(null);
@@ -1449,6 +1146,12 @@ function applyRemoteReset(p: {
   actionSequenceRef.current = 0;
 
   suppressMpRef.current = false;
+  
+  // Set action log after a small delay to ensure React updates
+  setTimeout(() => {
+    setActionLog(p.actionLog);
+    actionLogRef.current = p.actionLog;
+  }, 0);
 }
 
   function clearTimers() {
@@ -1468,13 +1171,6 @@ function applyRemoteReset(p: {
   gameOverRef.current = true;
   setGameOver(true);
   clearTimers();
-
-  if (multiplayerActive && isHost && !suppressMpRef.current) {
-    mpSend({
-      event: "SYNC",
-      kind: "GAME_OVER",
-    });
-  }
 }
 
   function snapshotCurrentHandLog() {
@@ -1513,17 +1209,6 @@ function applyRemoteReset(p: {
       oppStartStack: handStartStacks.top,
     };
 
-    // Broadcast to joiner IMMEDIATELY after creating snapshot
-    if (multiplayerActive && isHost && !suppressMpRef.current) {
-      setTimeout(() => {
-        mpSend({
-          event: "SYNC",
-          kind: "HAND_LOG_SNAPSHOT",
-          snapshot: snap,
-        });
-      }, 50);
-    }
-
     if (prev[0]?.handNo === snap.handNo) return prev;
     return [snap, ...prev].slice(0, 30);
   });
@@ -1542,17 +1227,6 @@ function applyRemoteReset(p: {
       return;
     }
 
-    // multiplayer: host deals + broadcasts, joiner waits for SYNC
-    if (isHost) {
-      // Small delay to ensure joiner's channel is subscribed
-      const timer = setTimeout(() => {
-        const next = drawUniqueCards(9);
-        setCards(next);
-        mpSend({ event: "SYNC", kind: "DEAL", cards: next, handId, gameSession });
-      }, 250);
-      
-      return () => clearTimeout(timer);
-    }
   }, [seatedRole, handId, gameSession, multiplayerActive, isHost]);
 
   function logAction(seat: Seat, text: string, potOverride?: number) {
@@ -1583,14 +1257,6 @@ const shouldAppendPot =
     const next = [...prev, item];
     actionLogRef.current = next;
 
-    if (multiplayerActive && isHost && !suppressMpRef.current) {
-      mpSend({
-        event: "SYNC",
-        kind: "LOG_ACTION",
-        item,
-      });
-    }
-
     return next;
   });
 }
@@ -1609,14 +1275,6 @@ setLastRaiseSize(BB);
 const firstToAct = nextStreet === 0 ? dealerSeat : nonDealerSeat;
 setToAct(firstToAct);
 
-if (multiplayerActive && isHost && !suppressMpRef.current) {
-mpSend({
-event: "SYNC",
-kind: "RESET_STREET",
-nextStreet,
-firstToAct,
-  });
-}
   }
 
   function pullBetsIntoPot() {
@@ -1626,14 +1284,6 @@ firstToAct,
       pot: roundToHundredth(prev.pot + prev.bets.top + prev.bets.bottom),
       bets: { top: 0, bottom: 0 },
     };
-
-    if (multiplayerActive && isHost && !suppressMpRef.current) {
-      mpSend({
-        event: "SYNC",
-        kind: "PULL_BETS",
-        game: next,
-      });
-    }
 
     return next;
   });
@@ -1677,37 +1327,13 @@ firstToAct,
     stacks: nextStacks,
   });
 
-  if (multiplayerActive && isHost && !suppressMpRef.current) {
-    mpSend({
-      event: "SYNC",
-      kind: "END_HAND",
-      stacks: nextStacks,
-    });
-  }
-
   // Mark hand ended + snapshot
   setHandResult({ status: "ended", winner, reason, message });
-
-  if (multiplayerActive && isHost && !suppressMpRef.current) {
-    mpSend({
-      event: "SYNC",
-      kind: "HAND_RESULT",
-      handResult: { status: "ended", winner, reason, message },
-    });
-  }
 
   setTimeout(() => snapshotCurrentHandLog(), 0);
 
   // If this hand ends the match, freeze here.
   if (shouldEndGame) {
-    if (multiplayerActive && isHost && !suppressMpRef.current) {
-      setTimeout(() => {
-        mpSend({
-          event: "SYNC",
-          kind: "GAME_OVER",
-        });
-      }, 100);
-    }
 
     setTimeout(() => {
       gameOverRef.current = true;
@@ -1721,14 +1347,7 @@ firstToAct,
     // Don't start a new hand if game is over
     if (gameOverRef.current) return;
 
-    if (multiplayerActive && isHost && !suppressMpRef.current) {
-      mpSend({
-        event: "SYNC",
-        kind: "NEW_HAND",
-      });
-    }
-
-allInCallThisHandRef.current = false;
+    allInCallThisHandRef.current = false;
     actionSequenceRef.current = 0;
 
     setHandResult({ status: "playing", winner: null, reason: null, message: "" });
@@ -1750,14 +1369,6 @@ allInCallThisHandRef.current = false;
     setHandId((h) => {
       const next = h + 1;
 
-      if (multiplayerActive && isHost && !suppressMpRef.current) {
-        mpSend({
-          event: "SYNC",
-          kind: "SET_HAND_ID",
-          handId: next,
-        });
-      }
-
       return next;
     });
   }
@@ -1770,8 +1381,14 @@ allInCallThisHandRef.current = false;
     setGameOver(false);
     setPlayAgainRequested(false);
 
-    const nextDealerOffset: 0 | 1 = Math.random() < 0.5 ? 0 : 1;
-setDealerOffset(nextDealerOffset);
+    // Only randomize dealerOffset in single-player mode
+// In multiplayer, keep the existing dealerOffset that was set when creating the game
+let currentDealerOffset = dealerOffset;
+if (!multiplayerActive) {
+  const nextDealerOffset: 0 | 1 = Math.random() < 0.5 ? 0 : 1;
+  setDealerOffset(nextDealerOffset);
+  currentDealerOffset = nextDealerOffset;
+}
 
     const freshGame: GameState = {
   stacks: { top: STARTING_STACK_BB, bottom: STARTING_STACK_BB },
@@ -1809,22 +1426,6 @@ setCards(nextCards);
     setGameSession((s: number) => {
   const next = s + 1;
 
-  if (isHost && !suppressMpRef.current) {
-  mpSend({
-    event: "SYNC",
-    kind: "RESET",
-    dealerOffset: nextDealerOffset,
-    gameSession: next,
-    handId: 0,
-    game: freshGame,
-    toAct: nextDealerOffset === 0 ? "bottom" : "top",
-    handStartStacks: { top: STARTING_STACK_BB, bottom: STARTING_STACK_BB },
-    lastRaiseSize: BB,
-    endedBoardSnapshot: 0,
-    blindsPosted: false,
-  });
-}
-
   return next;
 });
 
@@ -1844,10 +1445,10 @@ allInCallThisHandRef.current = false;
   }
 
   // Raw cards from deck: [0,1] = top seat, [2,3] = bottom seat
-  const topRaw1 = cards?.[0];
-  const topRaw2 = cards?.[1];
-  const bottomRaw1 = cards?.[2];
-  const bottomRaw2 = cards?.[3];
+const topRaw1 = displayCards?.[0];
+const topRaw2 = displayCards?.[1];
+const bottomRaw1 = displayCards?.[2];
+const bottomRaw2 = displayCards?.[3];
 
   // Opponent cards (from my perspective)
   const oppRaw1 = mySeat === "bottom" ? topRaw1 : bottomRaw1;
@@ -1871,7 +1472,7 @@ allInCallThisHandRef.current = false;
     return a >= b ? ([youRaw1, youRaw2] as const) : ([youRaw2, youRaw1] as const);
   }, [youRaw1, youRaw2]);
 
-  const board = cards ? cards.slice(4, 9) : [];
+  const board = displayCards ? displayCards.slice(4, 9) : [];
 
   const heroHandRank = useMemo(() => {
   if (!youC || !youD) return null;
@@ -1890,23 +1491,13 @@ useEffect(() => {
   if (blindsKeyRef.current === blindsKey) return;
   blindsKeyRef.current = blindsKey;
 
-  if (!multiplayerActive || isHost) {
+    if (!multiplayerActive) {
     setHandStartStacks(gameRef.current.stacks);
-
-      if (isHost && !suppressMpRef.current) {
-  mpSend({
-    event: "SYNC",
-    kind: "HAND_START_STACKS",
-    stacks: gameRef.current.stacks,
-  });
-}
     }
 
     // reset per-hand state
     setHandResult({ status: "playing", winner: null, reason: null, message: "" });
     allInCallThisHandRef.current = false;
-    setActionLog([]);
-    actionLogRef.current = [];
     setStreet(0);
     setChecked({ top: false, bottom: false });
     setLastAggressor(null);
@@ -1939,12 +1530,27 @@ useEffect(() => {
         };
 
         if (isHost && !suppressMpRef.current) {
-  mpSend({
-    event: "SYNC",
-    kind: "POST_BLINDS",
-    game: nextGame,
-    toAct: dealerSeat,
-  });
+  const blindItems = [
+    {
+      id: uid(),
+      sequence: actionSequenceRef.current++,
+      street: "Preflop" as StreetName,
+      seat: dealerSeat,
+      text: `Posts SB ${formatBB(SB)}bb`
+    },
+    {
+      id: uid(),
+      sequence: actionSequenceRef.current++,
+      street: "Preflop" as StreetName,
+      seat: nonDealerSeat,
+      text: `Posts BB ${formatBB(BB)}bb`
+    }
+  ];
+
+  // Host adds blind actions to its own log immediately BEFORE sending
+  setActionLog(blindItems);
+  actionLogRef.current = blindItems;
+  
 }
 
         return nextGame;
@@ -1954,35 +1560,14 @@ useEffect(() => {
     // who acts first preflop = dealer
     setToAct(dealerSeat);
 
-    setTimeout(() => {
-  blindsPostedRef.current = false;
-
-  if (!multiplayerActive || isHost) {
-    logAction(
-      "top",
-      dealerSeat === "top" ? `Posts SB ${formatBB(SB)}bb` : `Posts BB ${formatBB(BB)}bb`
-    );
-    logAction(
-      "bottom",
-      dealerSeat === "bottom" ? `Posts SB ${formatBB(SB)}bb` : `Posts BB ${formatBB(BB)}bb`
-    );
-  }
-
+   setTimeout(() => {
   blindsPostedRef.current = true;
 
-  if (isHost && !suppressMpRef.current) {
-  mpSend({
-    event: "SYNC",
-    kind: "BLINDS_POSTED",
-  });
-}
 }, 0);
 
     setBetSize(2);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seatedRole, handId, dealerSeat, gameSession]);
-
-  const isBottomTurn = seatedRole && toAct === mySeat && handResult.status === "playing";
 
  useEffect(() => {
   function onKeyDown(e: KeyboardEvent) {
@@ -1990,9 +1575,9 @@ useEffect(() => {
     if (!(seatedRole && toAct === "bottom" && handResult.status === "playing")) return;
 
     const defaultTo =
-      street === 0
-        ? 2.5
-        : roundToHundredth((game.pot + game.bets.top + game.bets.bottom) * 0.5);
+  displayStreet === 0
+    ? 2.5
+    : roundToHundredth((displayGame.pot + displayGame.bets.top + displayGame.bets.bottom) * 0.5);
 
     const size = betSize === "" ? defaultTo : betSize;
 
@@ -2001,7 +1586,7 @@ useEffect(() => {
 
   window.addEventListener("keydown", onKeyDown);
   return () => window.removeEventListener("keydown", onKeyDown);
-}, [seatedRole, toAct, handResult.status, street, game.pot, game.bets.top, game.bets.bottom, betSize]);
+}, [seatedRole, displayToAct, displayHandResult.status, displayStreet, displayGame.pot, displayGame.bets.top, displayGame.bets.bottom, betSize]);
 
   function currentFacingBet(seat: Seat) {
     const other: Seat = seat === "top" ? "bottom" : "top";
@@ -2030,14 +1615,6 @@ useEffect(() => {
       if (equalBets && lastToActAfterAggro === null) {
         pullBetsIntoPot();
 
-        if (multiplayerActive && isHost && !suppressMpRef.current) {
-          mpSend({
-            event: "SYNC",
-            kind: "STREET_COMPLETE",
-            street,
-          });
-        }
-
         if (street < 5) {
   const nextStreet: Street = street === 0 ? 3 : street === 3 ? 4 : 5;
 
@@ -2047,13 +1624,6 @@ useEffect(() => {
   if (someoneAllIn) {
     // show the full board
     setStreet(5);
-
-    if (multiplayerActive && isHost && !suppressMpRef.current) {
-      mpSend({
-        event: "SYNC",
-        kind: "ALL_IN_RUNOUT",
-      });
-    }
 
     // go straight to showdown
     resolveShowdown();
@@ -2099,24 +1669,9 @@ if (
 ) {
   pullBetsIntoPot();
 
-  if (multiplayerActive && isHost && !suppressMpRef.current) {
-    mpSend({
-      event: "SYNC",
-      kind: "STREET_COMPLETE",
-      street,
-    });
-  }
-
   // NEW: if anyone is all-in, run it out to the river and resolve immediately
   if (game.stacks.top <= 0 || game.stacks.bottom <= 0) {
     setStreet(5);
-
-    if (multiplayerActive && isHost && !suppressMpRef.current) {
-      mpSend({
-        event: "SYNC",
-        kind: "ALL_IN_RUNOUT",
-      });
-    }
 
     resolveShowdown();
     return;
@@ -2147,14 +1702,6 @@ if (
   endedStreetRef.current = 5;
   setEndedBoardSnapshot(5);
 
-  if (multiplayerActive && isHost && !suppressMpRef.current) {
-    mpSend({
-      event: "SYNC",
-      kind: "SET_ENDED_SNAPSHOT",
-      endedBoardSnapshot: 5,
-    });
-  }
-
   // ✅ DEFINE THESE EARLY - BEFORE logAction calls
   const topBest5 = sortBest5ForDisplay(best5From7(top7));
   const bottomBest5 = sortBest5ForDisplay(best5From7(bottom7));
@@ -2174,17 +1721,6 @@ if (
   // Control face-up cards in the UI
   setOppRevealed(topShows);
   setYouMucked(!bottomShows);
-
-  if (multiplayerActive && isHost && !suppressMpRef.current) {
-    mpSend({
-      event: "SYNC",
-      kind: "SHOWDOWN",
-      topShows,
-      bottomShows,
-      winner,
-      showdownFirst: firstToShow,
-    });
-  }
 
   // NOW you can use topBest5 and bottomBest5 in logAction
   logAction(
@@ -2342,34 +1878,14 @@ function cards5Str(cards5: Card[]) {
   function actFold(seat: Seat) {
     if (handResult.status !== "playing") return;
 
-    if (multiplayerActive && isHost && !suppressMpRef.current) {
-  mpSend({ event: "ACTION", seat, action: { type: "FOLD" } });
-}
-
     const other: Seat = seat === "top" ? "bottom" : "top";
-
-    if (multiplayerActive && isHost && !suppressMpRef.current) {
-      mpSend({
-        event: "SYNC",
-        kind: "FOLD_END",
-        winner: other,
-        endedStreet: street,
-      });
-    }
 
     logAction(seat, "Folds");
     endedStreetRef.current = street;
     setEndedBoardSnapshot(street);
 
-    if (multiplayerActive && isHost && !suppressMpRef.current) {
-      mpSend({
-        event: "SYNC",
-        kind: "SET_ENDED_SNAPSHOT",
-        endedBoardSnapshot: street,
-      });
-    }
     const potTotal = formatBB(
-  roundToHundredth(game.pot + game.bets.top + game.bets.bottom)
+  roundToHundredth(displayGame.pot + displayGame.bets.top + displayGame.bets.bottom)
 );
 
 logAction(
@@ -2389,22 +1905,9 @@ endHand(
   if (handResult.status !== "playing") return;
   if (!canCheck(seat)) return;
 
-  if (multiplayerActive && isHost && !suppressMpRef.current) {
-  mpSend({ event: "ACTION", seat, action: { type: "CHECK" } });
-}
-
   logAction(seat, "Checks");
   setChecked((prev: { top: boolean; bottom: boolean }) => ({ ...prev, [seat]: true }));
   setActionsThisStreet((n: number) => n + 1);
-
-  if (multiplayerActive && isHost && !suppressMpRef.current) {
-    mpSend({
-      event: "SYNC",
-      kind: "SET_CHECKED",
-      seat,
-      actionsThisStreet: actionsThisStreet + 1,
-    });
-  }
 
     if (
   street === 0 &&
@@ -2416,23 +1919,11 @@ endHand(
 
 const other: Seat = seat === "top" ? "bottom" : "top";
 
-  if (multiplayerActive && isHost && !suppressMpRef.current) {
-    mpSend({
-      event: "SYNC",
-      kind: "SET_TO_ACT",
-      toAct: other,
-    });
-  }
-
 setToAct(other);
   }
 
   function actCall(seat: Seat) {
   if (handResult.status !== "playing") return;
-
-   if (multiplayerActive && isHost && !suppressMpRef.current) {
-  mpSend({ event: "ACTION", seat, action: { type: "CALL" } });
-}
 
     const toCall = amountToCall(seat);
     const add = roundToHundredth(Math.min(toCall, game.stacks[seat]));
@@ -2495,52 +1986,24 @@ if (
   (callerWillBeAllIn || game.stacks[bettorSeat] <= 0)
 ) {
   allInCallThisHandRef.current = true;
-
-  if (multiplayerActive && isHost && !suppressMpRef.current) {
-    mpSend({
-      event: "SYNC",
-      kind: "ALL_IN_CALL_FLAG",
-    });
-  }
 }
 
 if (street !== 0 && callerWillBeAllIn && bettor) {
   setShowdownFirst(bettor);
 
-  if (multiplayerActive && isHost && !suppressMpRef.current) {
-    mpSend({
-      event: "SYNC",
-      kind: "SET_SHOWDOWN_FIRST",
-      showdownFirst: bettor,
-    });
-  }
 }
 
     logAction(
   seat,
   `Calls ${formatBB(add)}bb`,
-  roundToHundredth(game.pot + game.bets.top + game.bets.bottom + add)
+  roundToHundredth(displayGame.pot + displayGame.bets.top + displayGame.bets.bottom + add)
 );
     setSawCallThisStreet(true);
     setActionsThisStreet((n: number) => n + 1);
 
-    if (multiplayerActive && isHost && !suppressMpRef.current) {
-      mpSend({
-        event: "SYNC",
-        kind: "SAW_CALL",
-        actionsThisStreet: actionsThisStreet + 1,
-      });
-    }
-
     if (lastToActAfterAggro === seat) {
       setLastToActAfterAggro(null);
 
-      if (multiplayerActive && isHost && !suppressMpRef.current) {
-        mpSend({
-          event: "SYNC",
-          kind: "CLEAR_LAST_TO_ACT",
-        });
-      }
     }
 
     // If this is a river call facing a bet, bettor must show first
@@ -2548,36 +2011,16 @@ if (street === 5 && currentFacingBet(seat)) {
   const bettor = streetBettor;
   if (bettor) {
     setShowdownFirst(bettor);
-
-    if (multiplayerActive && isHost && !suppressMpRef.current) {
-      mpSend({
-        event: "SYNC",
-        kind: "SET_SHOWDOWN_FIRST",
-        showdownFirst: bettor,
-      });
-    }
   }
 }
 
     const other: Seat = seat === "top" ? "bottom" : "top";
-
-    if (multiplayerActive && isHost && !suppressMpRef.current) {
-      mpSend({
-        event: "SYNC",
-        kind: "SET_TO_ACT",
-        toAct: other,
-      });
-    }
 
     setToAct(other);
   }
 
   function actBetRaiseTo(seat: Seat, targetTotalBet: number) {
   if (handResult.status !== "playing") return;
-
-    if (multiplayerActive && isHost && !suppressMpRef.current) {
-  mpSend({ event: "ACTION", seat, action: { type: "BET_RAISE_TO", to: targetTotalBet } });
-}
 
   const other: Seat = seat === "top" ? "bottom" : "top";
   const curr = game.bets[seat];
@@ -2631,17 +2074,21 @@ if (isFacing && roundToHundredth(target) === roundToHundredth(otherBet)) {
     const add = roundToHundredth(Math.max(0, target - curr));
     if (add <= 0) return;
 
-    setGame((prev) => ({
-      ...prev,
-      stacks: {
-        ...prev.stacks,
-        [seat]: roundToHundredth(Math.max(0, prev.stacks[seat] - add)),
-      } as GameState["stacks"],
-      bets: {
-        ...prev.bets,
-        [seat]: roundToHundredth(prev.bets[seat] + add),
-      } as GameState["bets"],
-    }));
+    setGame((prev) => {
+      const nextGame = {
+        ...prev,
+        stacks: {
+          ...prev.stacks,
+          [seat]: roundToHundredth(Math.max(0, prev.stacks[seat] - add)),
+        } as GameState["stacks"],
+        bets: {
+          ...prev.bets,
+          [seat]: roundToHundredth(prev.bets[seat] + add),
+        } as GameState["bets"],
+      };
+
+      return nextGame;
+    });
 
     const newRaiseSize = isFacing
     ? roundToHundredth(target - otherBet)
@@ -2652,7 +2099,7 @@ if (isFacing && roundToHundredth(target) === roundToHundredth(otherBet)) {
     logAction(
   seat,
   otherBet > curr ? `Raises to ${formatBB(target)}bb` : `Bets ${formatBB(target)}bb`,
-  roundToHundredth(game.pot + game.bets.top + game.bets.bottom + add)
+  roundToHundredth(displayGame.pot + displayGame.bets.top + displayGame.bets.bottom + add)
 );
 
     setStreetBettor(seat);
@@ -2662,26 +2109,6 @@ if (isFacing && roundToHundredth(target) === roundToHundredth(otherBet)) {
 
     setLastAggressor(seat);
     setLastToActAfterAggro(other);
-
-    if (multiplayerActive && isHost && !suppressMpRef.current) {
-      mpSend({
-        event: "SYNC",
-        kind: "SET_AGGRESSOR",
-        lastAggressor: seat,
-        lastToActAfterAggro: other,
-        actionsThisStreet: actionsThisStreet + 1,
-        lastRaiseSize: newRaiseSize,
-        streetBettor: seat,
-      });
-    }
-
-    if (multiplayerActive && isHost && !suppressMpRef.current) {
-      mpSend({
-        event: "SYNC",
-        kind: "SET_TO_ACT",
-        toAct: other,
-      });
-    }
 
     setToAct(other);
   }
@@ -2693,41 +2120,42 @@ if (isFacing && roundToHundredth(target) === roundToHundredth(otherBet)) {
     | { type: "BET_RAISE_TO"; to: number };
 
   function dispatchAction(action: GameAction) {
-  const seat: Seat = mySeat;
-
-  if (handResult.status !== "playing") return;
-  if (gameOverRef.current) return;
-  if (toAct !== seat) return; // ignore clicks while opponent is thinking
-
-  if (multiplayerActive) {
-  // Joiner sends; host applies and drives SYNC.
-  if (!isHost) {
-    mpSend({ event: "ACTION", seat, action });
+  // In multiplayer mode, use the controllers
+  if (multiplayerActive && mpState) {
+    const seat: Seat = mySeat;
+    
+    if (!mpState || mpState.handResult.status !== "playing") return;
+    if (mpState.toAct !== seat) return;
+    
+    if (isHost && mpHost) {
+      // HOST: Process action directly
+      mpHost.processAction(seat, action);
+      // Update our display
+      setMpState(JSON.parse(JSON.stringify(mpHost.getState())));
+    } else if (mpJoiner) {
+      // JOINER: Send action to host
+      mpJoiner.sendAction(seat, action);
+    }
     return;
   }
-
-  applyActionFromSeat(seat, action);
-  return;
-}
-
+  
+  // Single-player mode (keep your existing logic)
+  if (handResult.status !== "playing") return;
+  if (gameOverRef.current) return;
+  if (toAct !== mySeat) return;
+  
   switch (action.type) {
     case "FOLD":
-      actFold(seat);
+      actFold(mySeat);
       return;
-
     case "CHECK":
-      actCheck(seat);
+      actCheck(mySeat);
       return;
-
     case "CALL":
-      actCall(seat);
+      actCall(mySeat);
       return;
-
     case "BET_RAISE_TO":
-      actBetRaiseTo(seat, action.to);
-      return;
-
-    default:
+      actBetRaiseTo(mySeat, action.to);
       return;
   }
 }
@@ -3039,11 +2467,13 @@ const joinGame = () => {
   <button
     type="button"
     onClick={() => {
-      clearTimers();
-      resetGame();
-      setSeatedRole((prev) => prev ?? "student");
-      setScreen("game");
-    }}
+  clearTimers();
+  if (!multiplayerActive) {
+    resetGame();
+  }
+  setSeatedRole((prev) => prev ?? "student");
+  setScreen("game");
+}}
     className="text-sm font-semibold text-white underline opacity-80 hover:opacity-100"
   >
     Go to game
@@ -3053,7 +2483,7 @@ const joinGame = () => {
 
       <div className="w-full max-w-xl flex flex-col">
         <h1 className="h-[44px] mb-8 text-center text-3xl font-bold leading-[44px]">
-          TEMP TITLE
+          TEMP TITLE2
         </h1>
 
       <div className="h-[220px] flex flex-col justify-start">
@@ -3345,9 +2775,11 @@ if (screen === "dashboard" && seatedRole === "student") {
   <button
   type="button"
   onClick={() => {
+  if (!multiplayerActive) {
     resetGame();
-    setScreen("game");
-  }}
+  }
+  setScreen("game");
+}}
   className="rounded-xl border px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50"
 >
   Join table
@@ -3463,9 +2895,11 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
   <button
   type="button"
   onClick={() => {
+  if (!multiplayerActive) {
     resetGame();
-    setScreen("game");
-  }}
+  }
+  setScreen("game");
+}}
   className="rounded-xl border px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50"
 >
   Join table
@@ -3581,9 +3015,9 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
   const bottomMaxTo = roundToHundredth(game.stacks.bottom + game.bets.bottom);
 
   const defaultTo =
-    street === 0
-      ? 2.5
-      : roundToHundredth((game.pot + game.bets.top + game.bets.bottom) * 0.5);
+  displayStreet === 0
+    ? 2.5
+    : roundToHundredth((displayGame.pot + displayGame.bets.top + displayGame.bets.bottom) * 0.5);
 
   const safeBetSize = betSize === "" ? defaultTo : betSize;
 
@@ -3598,7 +3032,8 @@ const oppPosLabel = viewingSnapshot
   ? viewingSnapshot.oppPos
   : dealerSeat === mySeat ? "BB" : "SB/D";
 
-const displayedActionLog = viewingSnapshot ? viewingSnapshot.log : actionLog;
+const displayedActionLog = viewingSnapshot ? viewingSnapshot.log : displayActionLog;
+console.log('UI displayedActionLog:', displayedActionLog);
 
 const displayedHistoryBoard = viewingSnapshot
   ? viewingSnapshot.endedBoard
@@ -3615,9 +3050,17 @@ const displayedHistoryBoard = viewingSnapshot
   confirmText="Reset game"
   onCancel={() => setShowResetConfirm(false)}
   onConfirm={() => {
-    setShowResetConfirm(false);
+  setShowResetConfirm(false);
+  
+  if (multiplayerActive && isHost) {
+    // In multiplayer, only host can reset and broadcasts to joiner
     resetGame();
-  }}
+  } else if (!multiplayerActive) {
+    // Single player can always reset
+    resetGame();
+  }
+  // Joiner cannot reset in multiplayer - do nothing
+}}
 />
 
       <main className="relative flex min-h-screen items-center justify-center px-6">
@@ -3648,9 +3091,9 @@ const displayedHistoryBoard = viewingSnapshot
         <div className="w-full max-w-6xl">
           <div className="mb-6 flex items-center justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-white">TEMP TITLE</h1>
+              <h1 className="text-2xl font-bold text-white">TEMP TITLE2</h1>
               <div className="text-sm text-white opacity-80 tabular-nums">
-                Pot: {formatBB(roundToHundredth(game.pot + game.bets.top + game.bets.bottom))}{" "}
+                Pot: {formatBB(roundToHundredth(displayGame.pot + displayGame.bets.top + displayGame.bets.bottom))}{" "}
                 BB <span className="opacity-60">·</span> {streetLabel}{" "}
                 <span className="opacity-60">·</span>{" "}
                 <span className="opacity-90">
@@ -3843,7 +3286,7 @@ const displayedHistoryBoard = viewingSnapshot
             className="text-center font-semibold text-white leading-none"
             style={{ marginLeft: "-56px" }}
           >
-            {a.seat === "bottom" ? `You (${heroPosLabel})` : `Opponent (${oppPosLabel})`}
+            {a.seat === myActualSeat ? `You (${heroPosLabel})` : `Opponent (${oppPosLabel})`}
           </div>
 
           <div className="text-center text-white/90 tabular-nums break-words leading-none">
@@ -3876,7 +3319,7 @@ const displayedHistoryBoard = viewingSnapshot
 
                   <div className="mt-4 flex justify-center gap-3">
                     {oppA && oppB ? (
-                      (handResult.status === "ended" && oppRevealed) ? (
+                      (displayHandResult.status === "ended" && displayOppRevealed) ? (
   <>
     <CardTile card={oppA} />
     <CardTile card={oppB} />
@@ -3896,7 +3339,7 @@ const displayedHistoryBoard = viewingSnapshot
               {/* BOARD (always current hand) */}
 <div className="flex h-40 items-center justify-center">
   <div className="flex gap-3">
-    {board.slice(0, street).map((c, i) => (
+    {board.slice(0, displayStreet).map((c, i) => (
       <CardTile key={i} card={c} />
     ))}
   </div>
@@ -3924,7 +3367,7 @@ const displayedHistoryBoard = viewingSnapshot
                   <div className="mt-4 flex flex-col items-center gap-2">
                  <div className="flex justify-center gap-3">
                    {youC && youD ? (
-                    handResult.status === "ended" && youMucked ? (
+                    displayHandResult.status === "ended" && displayYouMucked ? (
                      <>
                       <CardBack />
                       <CardBack />
@@ -3993,19 +3436,21 @@ const displayedHistoryBoard = viewingSnapshot
 
               <div className="flex justify-end gap-3">
                 <button
-                  type="button"
-                  onClick={() => dispatchAction({ type: "FOLD" })}
-                  className="h-[64px] w-[100px] rounded-2xl border bg-white px-4 py-3 text-sm font-semibold text-black shadow-sm hover:bg-gray-100"
-                >
-                  Fold
-                </button>
+  type="button"
+  onClick={() => dispatchAction({ type: "FOLD" })}
+  disabled={!isBottomTurn && !(multiplayerActive && mpState?.toAct === mySeat)}
+  className="h-[64px] w-[100px] rounded-2xl border bg-white px-4 py-3 text-sm font-semibold text-black shadow-sm hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+>
+  Fold
+</button>
 
                <button
   type="button"
   onClick={() =>
   dispatchAction(facingBetBottom ? { type: "CALL" } : { type: "CHECK" })
 }
-  className="flex h-[64px] w-[100px] flex-col items-center justify-center rounded-2xl border bg-white px-4 py-3 text-sm font-semibold text-black shadow-sm hover:bg-gray-100"
+  disabled={!isBottomTurn && !(multiplayerActive && mpState?.toAct === mySeat)}
+  className="flex h-[64px] w-[100px] flex-col items-center justify-center rounded-2xl border bg-white px-4 py-3 text-sm font-semibold text-black shadow-sm hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
 >
   <div>{facingBetBottom ? "Call" : "Check"}</div>
 
@@ -4019,7 +3464,8 @@ const displayedHistoryBoard = viewingSnapshot
                 <button
   type="button"
   onClick={() => dispatchAction({ type: "BET_RAISE_TO", to: safeBetSize })}
-  className="flex h-[64px] w-[100px] flex-col items-center justify-center rounded-2xl border bg-white px-4 py-3 text-sm font-semibold text-black shadow-sm hover:bg-gray-100"
+  disabled={!isBottomTurn && !(multiplayerActive && mpState?.toAct === mySeat)}
+  className="flex h-[64px] w-[100px] flex-col items-center justify-center rounded-2xl border bg-white px-4 py-3 text-sm font-semibold text-black shadow-sm hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
 >
   <div className="text-sm leading-tight">
     {facingBetBottom ? "Raise" : "Bet"}
@@ -4052,6 +3498,6 @@ const displayedHistoryBoard = viewingSnapshot
 
 // Connect people's names to their Linkedin? Have like a (Connect your Linkedin and then the name becomes a hyperlink?)
 
-// PRETTY MUCH READY TO START THE BACKEND? THE ACTUAL TESTING WITH REAL PEOPLE
+// Players are able to check when they can't, and the call button is bugged as it says you can call 0.5bb when youre supposed to be calling 5bb facing a 3bet. Im tired im going to bed.
 
 // Ask Wilson if he would like to do marketing for this 
