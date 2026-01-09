@@ -215,7 +215,7 @@ export class MultiplayerHost {
   // Constants
   private readonly SB = 0.5;
   private readonly BB = 1;
-  private readonly STARTING_STACK_BB = 50;
+  private readonly STARTING_STACK_BB = 25;
   
   private onStateChange?: () => void;
 
@@ -294,9 +294,10 @@ public startHand() {
     this.state.dealerOffset = this.state.dealerOffset === 0 ? 1 : 0;
     this.state.dealerSeat = this.state.dealerOffset === 0 ? "top" : "bottom";
     
-    // Apply blind level increase (reduce stacks by 25% every 10 hands)
-    // Happens on hand 11, 21, 31, etc (when handId is 10, 20, 30...)
-    if (this.state.handId !== 0 && this.state.handId % 10 === 0) {
+    // Apply blind level increase (reduce stacks by 25% every N hands as configured)
+    // Note: This needs to match GAME_CONFIG.BLINDS_INCREASE_EVERY_N_HANDS from page.tsx
+    const BLINDS_INCREASE_EVERY_N_HANDS = 5; // TODO: Share config between files
+    if (this.state.handId !== 0 && this.state.handId % BLINDS_INCREASE_EVERY_N_HANDS === 0) {
       this.state.game.stacks.top = Math.round(this.state.game.stacks.top * 0.75 * 100) / 100;
       this.state.game.stacks.bottom = Math.round(this.state.game.stacks.bottom * 0.75 * 100) / 100;
     }

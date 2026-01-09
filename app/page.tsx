@@ -110,9 +110,21 @@ type AuthoritativeState = {
 const RANKS = ["A", "K", "Q", "J", "T", "9", "8", "7", "6", "5", "4", "3", "2"];
 const SUITS = ["♠", "♥", "♦", "♣"];
 
-const STARTING_STACK_BB = 50;
+// ============================================
+// GAME CONFIGURATION - Change these values to adjust game settings
+// ============================================
+const GAME_CONFIG = {
+  STARTING_STACK_BB: 25,           // Starting stack size in big blinds
+  BLINDS_INCREASE_EVERY_N_HANDS: 5, // How often blind levels change (stacks reduced by 25%)
+  WARNING_STARTS_AT_HAND: 2,        // When to start showing blind change warnings (within each block)
+};
+// ============================================
+
 const BASE_SB = 0.5;
 const BASE_BB = 1;
+
+// Derived constants (don't change these)
+const STARTING_STACK_BB = GAME_CONFIG.STARTING_STACK_BB;
 
 /* ---------- helpers ---------- */
 
@@ -897,11 +909,11 @@ useEffect(() => {
   // Calculate blind notice using correct hand ID
   const effectiveHandId = multiplayerActive && mpState ? mpState.handId : handId;
   const effectiveHandNo = effectiveHandId + 1;
-  const withinBlock = ((effectiveHandNo - 1) % 10) + 1;
-  const blindNotice = (withinBlock >= 7 && withinBlock <= 10)
-    ? (11 - withinBlock === 1 
+  const withinBlock = ((effectiveHandNo - 1) % GAME_CONFIG.BLINDS_INCREASE_EVERY_N_HANDS) + 1;
+  const blindNotice = (withinBlock >= GAME_CONFIG.WARNING_STARTS_AT_HAND && withinBlock <= GAME_CONFIG.BLINDS_INCREASE_EVERY_N_HANDS)
+    ? ((GAME_CONFIG.BLINDS_INCREASE_EVERY_N_HANDS + 1) - withinBlock === 1 
         ? "Blinds will change next hand" 
-        : `Blinds will change in ${11 - withinBlock} hands`)
+        : `Blinds will change in ${(GAME_CONFIG.BLINDS_INCREASE_EVERY_N_HANDS + 1) - withinBlock} hands`)
     : null;
 
   // Display variables - use mpState when in multiplayer, otherwise use local state
@@ -1518,7 +1530,7 @@ useEffect(() => {
 
     if (!multiplayerActive || isHost) {
       setGame((prev: GameState) => {
-        const isLevelChangeHand = handId !== 0 && handId % 10 === 0; // hand 11, 21, 31...
+        const isLevelChangeHand = handId !== 0 && handId % GAME_CONFIG.BLINDS_INCREASE_EVERY_N_HANDS === 0;
         const mult = isLevelChangeHand ? 0.75 : 1;
 
         const topScaled = roundToHundredth(prev.stacks.top * mult);
@@ -2052,11 +2064,11 @@ if (street === 5 && currentFacingBet(seat)) {
   // Calculate blind notice using correct hand ID
   const effectiveHandId = multiplayerActive && mpState ? mpState.handId : handId;
   const effectiveHandNo = effectiveHandId + 1;
-  const withinBlock = ((effectiveHandNo - 1) % 10) + 1; // 1..10 within each 10-hand block
+  const withinBlock = ((effectiveHandNo - 1) % GAME_CONFIG.BLINDS_INCREASE_EVERY_N_HANDS) + 1;
   let blindNotice: string | null = null;
   
-  if (withinBlock >= 7 && withinBlock <= 10) {
-    const remaining = 11 - withinBlock; // 7->4, 8->3, 9->2, 10->1
+  if (withinBlock >= GAME_CONFIG.WARNING_STARTS_AT_HAND && withinBlock <= GAME_CONFIG.BLINDS_INCREASE_EVERY_N_HANDS) {
+    const remaining = (GAME_CONFIG.BLINDS_INCREASE_EVERY_N_HANDS + 1) - withinBlock;
     blindNotice =
       remaining === 1
         ? "Blinds will change next hand"
@@ -3751,6 +3763,6 @@ const displayedHistoryBoard = viewingSnapshot
 
 // Connect people's names to their Linkedin? Have like a (Connect your Linkedin and then the name becomes a hyperlink?)
 
-// FIX THIS: On any street after preflop, you know how 
+// Future improvement idea: You could create a shared gameConfig.ts file that both files import from, so you only need to change it in one place. But for now, just remember to update both!
 
 // Ask Wilson if he would like to do marketing for this 
