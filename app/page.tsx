@@ -2415,14 +2415,14 @@ useEffect(() => {
     const myCards = mySeat === "bottom" ? [cards[2], cards[3]] : [cards[0], cards[1]];
     const oppCards = mySeat === "bottom" ? [cards[0], cards[1]] : [cards[2], cards[3]];
     
-    const snap = {
+    const snap: HandLogSnapshot = {
       handNo: mpState.handId,
       dealer: mpState.dealerSeat,
       endedStreet: endedSt,
       endedBoard: board.slice(0, endedSt),
       log: mpState.actionLog,
-      heroPos: mpState.dealerSeat === mySeat ? "SB" : "BB",
-      oppPos: mpState.dealerSeat === mySeat ? "BB" : "SB",
+      heroPos: (mpState.dealerSeat === mySeat ? "SB" : "BB") as "SB" | "BB",
+      oppPos: (mpState.dealerSeat === mySeat ? "BB" : "SB") as "SB" | "BB",
       heroCards: myCards.sort((a, b) => RANK_TO_VALUE[b.rank] - RANK_TO_VALUE[a.rank]) as [Card, Card],
       oppCards: oppCards.sort((a, b) => RANK_TO_VALUE[b.rank] - RANK_TO_VALUE[a.rank]) as [Card, Card],
       oppShown: mpState.oppRevealed,
