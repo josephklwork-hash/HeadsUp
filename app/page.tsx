@@ -74,6 +74,12 @@ type HandLogSnapshot = {
 
   heroStartStack: number;
   oppStartStack: number;
+  
+  // Best 5-card hands
+  heroBest5?: Card[];
+  oppBest5?: Card[];
+  heroHandDesc?: string;
+  oppHandDesc?: string;
 };
 
 type AuthoritativeState = {
@@ -498,18 +504,6 @@ const handNo = handId + 1; // 1-based
 const SB = BASE_SB; // always 0.5
 const BB = BASE_BB; // always 1
 
-
-  const withinBlock = ((handNo - 1) % 10) + 1; // 1..10 within each 10-hand block
-let blindNotice: string | null = null;
-
-if (withinBlock >= 7 && withinBlock <= 10) {
-  const remaining = 11 - withinBlock; // 7->4, 8->3, 9->2, 10->1
-  blindNotice =
-    remaining === 1
-      ? "Blinds will change next hand"
-: `Blinds will change in ${remaining} hands`;
-}
-
   const [auth, setAuth] = useState<AuthoritativeState>(() => ({
   street: 0,
   toAct: "bottom",
@@ -900,6 +894,16 @@ useEffect(() => {
 
   const nonDealerSeat: Seat = dealerSeat === "top" ? "bottom" : "top";
 
+  // Calculate blind notice using correct hand ID
+  const effectiveHandId = multiplayerActive && mpState ? mpState.handId : handId;
+  const effectiveHandNo = effectiveHandId + 1;
+  const withinBlock = ((effectiveHandNo - 1) % 10) + 1;
+  const blindNotice = (withinBlock >= 7 && withinBlock <= 10)
+    ? (11 - withinBlock === 1 
+        ? "Blinds will change next hand" 
+        : `Blinds will change in ${11 - withinBlock} hands`)
+    : null;
+
   // Display variables - use mpState when in multiplayer, otherwise use local state
 const displayGame = multiplayerActive && mpState ? mpState.game : game;
 const displayToAct = multiplayerActive && mpState ? mpState.toAct : toAct;
@@ -1072,9 +1076,10 @@ setMySeat("top");
 setMultiplayerActive(true);
 
 // enter the game screen and wait for host's RESET
-clearTimers();
-setSeatedRole((prev) => prev ?? "student");
-setScreen("game");
+  clearTimers();
+  setBetSize(2);
+  setSeatedRole((prev) => prev ?? "student");
+  setScreen("game");
 }
 
 function clearPin() {
@@ -1209,7 +1214,9 @@ function applyRemoteReset(p: {
       oppStartStack: handStartStacks.top,
     };
 
-    if (prev[0]?.handNo === snap.handNo) return prev;
+    // Don't add duplicate snapshots for the same hand
+    if (prev.length > 0 && prev[0]?.handNo === snap.handNo) return prev;
+    console.log('Saving hand history snapshot:', snap.handNo + 1);
     return [snap, ...prev].slice(0, 30);
   });
 }
@@ -1454,16 +1461,16 @@ const bottomRaw2 = displayCards?.[3];
   const oppRaw1 = mySeat === "bottom" ? topRaw1 : bottomRaw1;
   const oppRaw2 = mySeat === "bottom" ? topRaw2 : bottomRaw2;
 
+  // My cards (from my perspective)
+const youRaw1 = mySeat === "bottom" ? bottomRaw1 : topRaw1;
+const youRaw2 = mySeat === "bottom" ? bottomRaw2 : topRaw2;
+
   const [oppA, oppB] = useMemo(() => {
     if (!oppRaw1 || !oppRaw2) return [undefined, undefined] as const;
     const a = RANK_TO_VALUE[oppRaw1.rank];
     const b = RANK_TO_VALUE[oppRaw2.rank];
     return a >= b ? ([oppRaw1, oppRaw2] as const) : ([oppRaw2, oppRaw1] as const);
   }, [oppRaw1, oppRaw2]);
-
-  // My cards (from my perspective)
-  const youRaw1 = mySeat === "bottom" ? bottomRaw1 : topRaw1;
-  const youRaw2 = mySeat === "bottom" ? bottomRaw2 : topRaw2;
 
   const [youC, youD] = useMemo(() => {
     if (!youRaw1 || !youRaw2) return [undefined, undefined] as const;
@@ -1572,21 +1579,28 @@ useEffect(() => {
  useEffect(() => {
   function onKeyDown(e: KeyboardEvent) {
     if (e.key !== "Enter") return;
-    if (!(seatedRole && toAct === "bottom" && handResult.status === "playing")) return;
+    if (!(displayToAct === mySeat && displayHandResult.status === "playing")) return;
 
-    const defaultTo =
-  displayStreet === 0
-    ? 2.5
-    : roundToHundredth((displayGame.pot + displayGame.bets.top + displayGame.bets.bottom) * 0.5);
+    const effectiveLastRaiseSize = multiplayerActive && mpState ? mpState.lastRaiseSize : lastRaiseSize;
+    const facingBet = displayGame.bets[oppActualSeat] > displayGame.bets[myActualSeat];
+    
+    // Use same logic as bottomMinRaise calculation
+    const minRaise = facingBet 
+      ? roundToHundredth(displayGame.bets[oppActualSeat] + effectiveLastRaiseSize)
+      : (displayStreet === 0 && displayGame.bets[myActualSeat] > 0 && displayGame.bets[oppActualSeat] > 0)
+        ? roundToHundredth(Math.max(displayGame.bets[myActualSeat], displayGame.bets[oppActualSeat]) + BB)
+        : BB;
+    
+    const isOpeningAction = displayGame.bets[myActualSeat] === 0 && displayGame.bets[oppActualSeat] === 0;
+    const defaultSize = (isOpeningAction && displayStreet > 0) ? 2 : minRaise;
+    const finalSize = betSize === "" ? defaultSize : Math.max(betSize, minRaise);
 
-    const size = betSize === "" ? defaultTo : betSize;
-
-    dispatchAction({ type: "BET_RAISE_TO", to: size });
+    dispatchAction({ type: "BET_RAISE_TO", to: finalSize });
   }
 
   window.addEventListener("keydown", onKeyDown);
   return () => window.removeEventListener("keydown", onKeyDown);
-}, [seatedRole, displayToAct, displayHandResult.status, displayStreet, displayGame.pot, displayGame.bets.top, displayGame.bets.bottom, betSize]);
+}, [displayToAct, mySeat, displayHandResult.status, betSize, displayGame, oppActualSeat, myActualSeat, multiplayerActive, mpState, lastRaiseSize, BB, displayStreet, dispatchAction]);
 
   function currentFacingBet(seat: Seat) {
     const other: Seat = seat === "top" ? "bottom" : "top";
@@ -1595,14 +1609,10 @@ useEffect(() => {
 
   function amountToCall(seat: Seat) {
     const other: Seat = seat === "top" ? "bottom" : "top";
-    return roundToHundredth(Math.max(0, game.bets[other] - game.bets[seat]));
+    return roundToHundredth(Math.max(0, displayGame.bets[other] - displayGame.bets[seat]));
   }
-
   function canCheck(seat: Seat, g: GameState = gameRef.current, st: Street = streetRef.current) {
   const other: Seat = seat === "top" ? "bottom" : "top";
-
-  if (st === 0 && g.bets[other] > g.bets[seat]) return false;
-
   return roundToHundredth(g.bets[other]) === roundToHundredth(g.bets[seat]);
 }
 
@@ -1630,6 +1640,7 @@ useEffect(() => {
 
   } else {
     resetStreetRound(nextStreet);
+    setBetSize(2);
   }
 } else {
   // showdown (existing)
@@ -1681,6 +1692,7 @@ if (
       if (street < 5) {
         const nextStreet: Street = street === 0 ? 3 : street === 3 ? 4 : 5;
         resetStreetRound(nextStreet);
+        setBetSize(2);
       } else {
         // River checked through (no betting): out-of-position shows first
         const noBetOnRiver = bothChecked && streetBettor === null;
@@ -2023,95 +2035,112 @@ if (street === 5 && currentFacingBet(seat)) {
   if (handResult.status !== "playing") return;
 
   const other: Seat = seat === "top" ? "bottom" : "top";
-  const curr = game.bets[seat];
-  const otherBet = game.bets[other];
+  const mySeatBet = displayGame.bets[seat];
+  const otherSeatBet = displayGame.bets[other];
+  const myStack = displayGame.stacks[seat];
+  const otherStack = displayGame.stacks[other];
 
-  const isFacing = otherBet > curr;
+  const isFacing = otherSeatBet > mySeatBet;
 
-// NLHE:
-// - If facing a bet, min raise-to = otherBet + lastRaiseSize
-// - If not facing a bet, min bet = BB (or min raise over your own current bet)
-    const minTarget = isFacing
-    ? roundToHundredth(otherBet + lastRaiseSize)
-    : roundToHundredth(curr + Math.max(BB, 0));
-
-    const otherStack = game.stacks[other];
-const otherCurr = game.bets[other];
-
-// Effective max total bet = what the shorter stack can match
-const effectiveMax = roundToHundredth(
-  Math.min(
-    curr + game.stacks[seat],
-    otherCurr + otherStack
-  )
-);
-
-const maxTarget = effectiveMax;
-
-// If opponent is already all-in (or this action would only match the bet),
-// this is NOT a raise — it is a call/all-in.
-const isOnlyCalling =
-  roundToHundredth(maxTarget) === roundToHundredth(otherBet);
-
-// Final target logic:
-// 1) If only calling → target = otherBet
-// 2) Else if stacks cap below min raise → target = maxTarget
-// 3) Else normal clamp
-const target = roundToHundredth(
-  isOnlyCalling
-    ? otherBet
-    : maxTarget < minTarget
-    ? maxTarget
-    : clamp(targetTotalBet, minTarget, maxTarget)
-);
-
-// If the target equals the opponent's bet, that's a CALL (not a raise).
-if (isFacing && roundToHundredth(target) === roundToHundredth(otherBet)) {
-  actCall(seat);
-  return;
-}
-
-    const add = roundToHundredth(Math.max(0, target - curr));
-    if (add <= 0) return;
-
-    setGame((prev) => {
-      const nextGame = {
-        ...prev,
-        stacks: {
-          ...prev.stacks,
-          [seat]: roundToHundredth(Math.max(0, prev.stacks[seat] - add)),
-        } as GameState["stacks"],
-        bets: {
-          ...prev.bets,
-          [seat]: roundToHundredth(prev.bets[seat] + add),
-        } as GameState["bets"],
-      };
-
-      return nextGame;
-    });
-
-    const newRaiseSize = isFacing
-    ? roundToHundredth(target - otherBet)
-    : roundToHundredth(target - curr);
-
-    setLastRaiseSize(newRaiseSize);
-
-    logAction(
-  seat,
-  otherBet > curr ? `Raises to ${formatBB(target)}bb` : `Bets ${formatBB(target)}bb`,
-  roundToHundredth(displayGame.pot + displayGame.bets.top + displayGame.bets.bottom + add)
-);
-
-    setStreetBettor(seat);
-
-    setActionsThisStreet((n: number) => n + 1);
-    setChecked({ top: false, bottom: false });
-
-    setLastAggressor(seat);
-    setLastToActAfterAggro(other);
-
-    setToAct(other);
+  // Calculate minimum raise according to NLHE rules:
+  // - If facing a bet/raise: must raise by at least the size of the previous raise
+  // - If opening (no bet): minimum is BB
+  let minTarget: number;
+  
+  // Use the correct lastRaiseSize from multiplayer state if available
+  const effectiveLastRaiseSize = multiplayerActive && mpState ? mpState.lastRaiseSize : lastRaiseSize;
+  
+  // Calculate blind notice using correct hand ID
+  const effectiveHandId = multiplayerActive && mpState ? mpState.handId : handId;
+  const effectiveHandNo = effectiveHandId + 1;
+  const withinBlock = ((effectiveHandNo - 1) % 10) + 1; // 1..10 within each 10-hand block
+  let blindNotice: string | null = null;
+  
+  if (withinBlock >= 7 && withinBlock <= 10) {
+    const remaining = 11 - withinBlock; // 7->4, 8->3, 9->2, 10->1
+    blindNotice =
+      remaining === 1
+        ? "Blinds will change next hand"
+        : `Blinds will change in ${remaining} hands`;
   }
+  
+  if (isFacing) {
+    // The previous raise size is stored in lastRaiseSize
+    // Min raise = opponent's current bet + lastRaiseSize
+    minTarget = roundToHundredth(otherSeatBet + effectiveLastRaiseSize);
+  } else {
+    // Opening bet: minimum is BB
+    minTarget = BB;
+  }
+
+  // Maximum we can bet is our total chips
+  const maxPossible = roundToHundredth(mySeatBet + myStack);
+  
+  // Effective maximum: opponent can only call up to their stack
+  const maxEffective = roundToHundredth(Math.min(maxPossible, otherSeatBet + otherStack));
+
+  // If we can't meet the minimum raise, we can only call or go all-in
+  const canMeetMinRaise = maxEffective >= minTarget;
+  
+  // If opponent is all-in and we're just matching, that's a call
+  const isJustCalling = isFacing && roundToHundredth(maxEffective) === roundToHundredth(otherSeatBet);
+  
+  if (isJustCalling) {
+    actCall(seat);
+    return;
+  }
+
+  // Determine final target
+  let target: number;
+  
+  if (!canMeetMinRaise) {
+    // Can't meet min raise, so go all-in
+    target = maxEffective;
+  } else {
+    // Clamp between min and max
+    target = roundToHundredth(clamp(targetTotalBet, minTarget, maxEffective));
+  }
+
+  // If somehow we end up matching opponent's bet exactly, that's a call
+  if (isFacing && roundToHundredth(target) === roundToHundredth(otherSeatBet)) {
+    actCall(seat);
+    return;
+  }
+
+  const chipsToAdd = roundToHundredth(target - mySeatBet);
+  if (chipsToAdd <= 0) return;
+
+  // Update game state
+  setGame((prev) => ({
+    ...prev,
+    stacks: {
+      ...prev.stacks,
+      [seat]: roundToHundredth(prev.stacks[seat] - chipsToAdd),
+    } as GameState["stacks"],
+    bets: {
+      ...prev.bets,
+      [seat]: target,
+    } as GameState["bets"],
+  }));
+
+  // Calculate the NEW raise size for the next player
+  const newRaiseSize = isFacing 
+    ? roundToHundredth(target - otherSeatBet)
+    : target;
+  
+  setLastRaiseSize(newRaiseSize);
+
+  // Log the action
+  const actionText = isFacing ? `Raises to ${formatBB(target)}bb` : `Bets ${formatBB(target)}bb`;
+  logAction(seat, actionText, roundToHundredth(displayGame.pot + displayGame.bets.top + displayGame.bets.bottom + chipsToAdd));
+
+  setStreetBettor(seat);
+  setActionsThisStreet((n: number) => n + 1);
+  setChecked({ top: false, bottom: false });
+  setLastAggressor(seat);
+  setLastToActAfterAggro(other);
+  setToAct(other);
+}
 
     type GameAction =
     | { type: "FOLD" }
@@ -2124,7 +2153,7 @@ if (isFacing && roundToHundredth(target) === roundToHundredth(otherBet)) {
   if (multiplayerActive && mpState) {
     const seat: Seat = mySeat;
     
-    if (!mpState || mpState.handResult.status !== "playing") return;
+    if (mpState.handResult.status !== "playing") return;
     if (mpState.toAct !== seat) return;
     
     if (isHost && mpHost) {
@@ -2295,11 +2324,127 @@ opponentTimerRef.current = window.setTimeout(() => {
   return () => window.removeEventListener("keydown", onKeyDown);
 }, [handLogHistory.length]);
 
- // auto next hand 5 seconds after hand ends
+// Capture hand history snapshot when hand ends in multiplayer
 useEffect(() => {
-  if (handResult.status !== "ended") return;
+  if (!multiplayerActive || !mpState) return;
+  if (mpState.handResult.status !== "ended") return;
+  
+  console.log('CAPTURING SNAPSHOT for handId:', mpState.handId);
+  
+  // Extract cards from perspective
+  const myCards = mySeat === "bottom" 
+    ? [displayCards?.[2], displayCards?.[3]]
+    : [displayCards?.[0], displayCards?.[1]];
+  
+  const oppCards = mySeat === "bottom"
+    ? [displayCards?.[0], displayCards?.[1]]
+    : [displayCards?.[2], displayCards?.[3]];
+  
+  if (!myCards[0] || !myCards[1] || !oppCards[0] || !oppCards[1]) return;
+  
+  // Calculate best 5-card hands if hand went to showdown
+  let heroBest5: Card[] | undefined;
+  let oppBest5: Card[] | undefined;
+  let heroHandDesc: string | undefined;
+  let oppHandDesc: string | undefined;
+  
+  if (mpState.street >= 3 && mpState.handResult.reason === "showdown") {
+    const finalBoard = board.slice(0, mpState.street);
+    const hero7 = [myCards[0], myCards[1], ...finalBoard];
+    const opp7 = [oppCards[0], oppCards[1], ...finalBoard];
+    
+    heroBest5 = sortBest5ForDisplay(best5From7(hero7));
+    oppBest5 = sortBest5ForDisplay(best5From7(opp7));
+    
+    const heroScore = evaluate7(hero7);
+    const oppScore = evaluate7(opp7);
+    
+    heroHandDesc = handDesc(heroScore);
+    oppHandDesc = handDesc(oppScore);
+  }
+  
+  const snap: HandLogSnapshot = {
+    handNo: mpState.handId,
+    dealer: mpState.dealerSeat,
+    endedStreet: mpState.street,
+    endedBoard: board.slice(0, mpState.street),
+    log: mpState.actionLog,
+    
+    heroPos: mpState.dealerSeat === mySeat ? "SB" : "BB",
+    oppPos: mpState.dealerSeat === mySeat ? "BB" : "SB",
+    
+    heroCards: RANK_TO_VALUE[myCards[0].rank] >= RANK_TO_VALUE[myCards[1].rank]
+      ? [myCards[0], myCards[1]]
+      : [myCards[1], myCards[0]],
+    
+    oppCards: RANK_TO_VALUE[oppCards[0].rank] >= RANK_TO_VALUE[oppCards[1].rank]
+      ? [oppCards[0], oppCards[1]]
+      : [oppCards[1], oppCards[0]],
+    
+    oppShown: mpState.oppRevealed,
+    
+    heroStartStack: mpState.handStartStacks[mySeat],
+    oppStartStack: mpState.handStartStacks[mySeat === "bottom" ? "top" : "bottom"],
+    
+    heroBest5,
+    oppBest5,
+    heroHandDesc,
+    oppHandDesc,
+  };
+  
+  setHandLogHistory((prev) => {
+    // Don't add duplicate snapshots for the same hand
+    if (prev.length > 0 && prev[0]?.handNo === snap.handNo) return prev;
+    console.log('Saving hand history snapshot:', snap.handNo + 1);
+    return [snap, ...prev].slice(0, 30);
+  });
+}, [mpState?.handResult.status, multiplayerActive, mpState, mySeat, displayCards, board]);
 
-  if (gameOverRef.current) {
+// auto next hand 5 seconds after hand ends
+useEffect(() => {
+  const currentHandResult = multiplayerActive && mpState ? mpState.handResult : handResult;
+  
+  if (currentHandResult.status !== "ended") return;
+
+  // Snapshot hand history when hand ends (for both host and joiner)
+  if (multiplayerActive && mpState && cards) {
+    // Create snapshot from mpState
+    const endedSt = mpState.street;
+    const board = cards.slice(4, 9);
+    
+    const myCards = mySeat === "bottom" ? [cards[2], cards[3]] : [cards[0], cards[1]];
+    const oppCards = mySeat === "bottom" ? [cards[0], cards[1]] : [cards[2], cards[3]];
+    
+    const snap = {
+      handNo: mpState.handId,
+      dealer: mpState.dealerSeat,
+      endedStreet: endedSt,
+      endedBoard: board.slice(0, endedSt),
+      log: mpState.actionLog,
+      heroPos: mpState.dealerSeat === mySeat ? "SB" : "BB",
+      oppPos: mpState.dealerSeat === mySeat ? "BB" : "SB",
+      heroCards: myCards.sort((a, b) => RANK_TO_VALUE[b.rank] - RANK_TO_VALUE[a.rank]) as [Card, Card],
+      oppCards: oppCards.sort((a, b) => RANK_TO_VALUE[b.rank] - RANK_TO_VALUE[a.rank]) as [Card, Card],
+      oppShown: mpState.oppRevealed,
+      heroStartStack: mpState.handStartStacks[mySeat],
+      oppStartStack: mpState.handStartStacks[mySeat === "bottom" ? "top" : "bottom"],
+    };
+    
+    setHandLogHistory((prev: HandLogSnapshot[]) => {
+      // Don't add duplicate snapshots for the same hand
+if (prev.length > 0 && prev[0]?.handNo === snap.handNo) return prev;
+console.log('Saving hand history snapshot:', snap.handNo + 1);
+return [snap, ...prev].slice(0, 30);
+    });
+  } else if (!multiplayerActive) {
+    // Single player snapshot (existing logic)
+    setTimeout(() => snapshotCurrentHandLog(), 0);
+  }
+
+ // Check for game over from multiplayer state or local state
+  const effectiveGameOver = (multiplayerActive && mpState) ? mpState.gameOver : gameOver;
+  
+  if (effectiveGameOver || gameOverRef.current) {
     if (nextHandTimerRef.current) {
       window.clearTimeout(nextHandTimerRef.current);
       nextHandTimerRef.current = null;
@@ -2307,9 +2452,22 @@ useEffect(() => {
     return;
   }
 
+  // Only host starts the next hand in multiplayer
+  if (multiplayerActive && !isHost) return;
+
   if (nextHandTimerRef.current) window.clearTimeout(nextHandTimerRef.current);
   nextHandTimerRef.current = window.setTimeout(() => {
-    startNewHand();
+    if (multiplayerActive && isHost && mpHost) {
+      // Check one more time before starting
+      const currentState = mpHost.getState();
+      if (currentState.game.stacks.top > 0 && currentState.game.stacks.bottom > 0) {
+        currentState.handId++;
+        mpHost.startHand();
+        setMpState(JSON.parse(JSON.stringify(mpHost.getState())));
+      }
+    } else if (!multiplayerActive) {
+      startNewHand();
+    }
   }, 5000);
 
   return () => {
@@ -2319,7 +2477,17 @@ useEffect(() => {
     }
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [handResult.status]);
+}, [multiplayerActive, isHost, mpHost, mpState?.handResult.status, handResult.status, mySeat, cards]);
+
+// Always clear betSize when it becomes our turn
+useEffect(() => {
+  if (displayToAct !== mySeat) return;
+  if (displayHandResult.status !== "playing") return;
+  
+  // Clear input box on every turn
+  setBetSize("");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [displayToAct, mySeat]);
 
 /* ---------- title screen ---------- */
 
@@ -2515,6 +2683,11 @@ const joinGame = () => {
         onChange={(e) =>
           setJoinPinInput(e.target.value.replace(/\D/g, ""))
         }
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && joinPinInput.length === 4) {
+            joinPinGame();
+          }
+        }}
         placeholder="Enter Game PIN"
         className="w-full max-w-xs rounded-xl border px-4 py-3 text-center text-lg tracking-widest tabular-nums"
       />
@@ -3009,17 +3182,45 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
 
   const streetLabel = streetNameFromCount(street);
 
-  const facingBetBottom = currentFacingBet("bottom");
-  const bottomCallAmt = amountToCall("bottom");
+  const facingBetBottom = displayGame.bets[oppActualSeat] > displayGame.bets[myActualSeat];
+  // Cap call amount to my remaining stack
+  const bottomCallAmt = roundToHundredth(
+    Math.min(
+      Math.max(0, displayGame.bets[oppActualSeat] - displayGame.bets[myActualSeat]),
+      displayGame.stacks[myActualSeat]
+    )
+  );
 
-  const bottomMaxTo = roundToHundredth(game.stacks.bottom + game.bets.bottom);
+  const effectiveLastRaiseSize = multiplayerActive && mpState ? mpState.lastRaiseSize : lastRaiseSize;
+  
+  // When not facing a bet/raise
+  const bottomMinRaise = facingBetBottom 
+    ? roundToHundredth(displayGame.bets[oppActualSeat] + effectiveLastRaiseSize)
+    : (displayStreet === 0 && displayGame.bets[myActualSeat] > 0 && displayGame.bets[oppActualSeat] > 0)
+      ? roundToHundredth(Math.max(displayGame.bets[myActualSeat], displayGame.bets[oppActualSeat]) + BB)
+      : BB;
+  
+  // Cap max bet to what opponent can actually call (effective stack)
+  const bottomMaxTo = roundToHundredth(
+    Math.min(
+      displayGame.bets[myActualSeat] + displayGame.stacks[myActualSeat],  // My total chips
+      displayGame.bets[oppActualSeat] + displayGame.stacks[oppActualSeat]  // Opponent's total chips
+    )
+  );
 
-  const defaultTo =
-  displayStreet === 0
-    ? 2.5
+  const defaultTo = facingBetBottom
+    ? bottomMinRaise
     : roundToHundredth((displayGame.pot + displayGame.bets.top + displayGame.bets.bottom) * 0.5);
 
-  const safeBetSize = betSize === "" ? defaultTo : betSize;
+  // Reset to 2BB when opening action on postflop streets
+  const isOpeningAction = displayGame.bets[myActualSeat] === 0 && displayGame.bets[oppActualSeat] === 0;
+  const effectiveBetSize = (betSize === "" || (isOpeningAction && displayStreet > 0)) ? 2 : betSize;
+  const safeBetSize = Math.max(effectiveBetSize, bottomMinRaise);
+  
+  // Display value: only update if betSize is legal (>= bottomMinRaise) or empty
+  const displayBetSize = betSize === "" 
+    ? (isOpeningAction && displayStreet > 0 ? 2 : bottomMinRaise)
+    : (betSize >= bottomMinRaise ? betSize : (isOpeningAction && displayStreet > 0 ? 2 : bottomMinRaise));
 
 const viewingSnapshot =
   logViewOffset === 0 ? null : handLogHistory[logViewOffset - 1];
@@ -3031,6 +3232,19 @@ const viewingSnapshot =
 const oppPosLabel = viewingSnapshot
   ? viewingSnapshot.oppPos
   : dealerSeat === mySeat ? "BB" : "SB/D";
+
+  // Get hand start stacks (before blinds posted)
+  const displayHandStartStacks = multiplayerActive && mpState 
+    ? mpState.handStartStacks 
+    : handStartStacks;
+  
+  const heroStartStack = viewingSnapshot 
+    ? viewingSnapshot.heroStartStack 
+    : displayHandStartStacks[myActualSeat];
+  
+  const oppStartStack = viewingSnapshot 
+    ? viewingSnapshot.oppStartStack 
+    : displayHandStartStacks[oppActualSeat];
 
 const displayedActionLog = viewingSnapshot ? viewingSnapshot.log : displayActionLog;
 console.log('UI displayedActionLog:', displayedActionLog);
@@ -3065,7 +3279,7 @@ const displayedHistoryBoard = viewingSnapshot
 
       <main className="relative flex min-h-screen items-center justify-center px-6">
 
-      {gameOver && !playAgainRequested && (
+      {((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver)) && !playAgainRequested && (
   <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50">
     <button
       onClick={() => setPlayAgainRequested(true)}
@@ -3076,7 +3290,7 @@ const displayedHistoryBoard = viewingSnapshot
   </div>
 )}
 
-{gameOver && playAgainRequested && (
+{((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver)) && playAgainRequested && (
   <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 rounded-2xl border border-black bg-white px-6 py-2 text-sm font-semibold text-black shadow-sm">
     Invited &quot;Opponent&quot; to play again, waiting for &quot;Opponent&apos;s&quot; response...
   </div>
@@ -3097,14 +3311,14 @@ const displayedHistoryBoard = viewingSnapshot
                 BB <span className="opacity-60">·</span> {streetLabel}{" "}
                 <span className="opacity-60">·</span>{" "}
                 <span className="opacity-90">
-  {handResult.status === "playing"
-    ? toAct === "bottom"
+  {displayHandResult.status === "playing"
+    ? displayToAct === mySeat
       ? "Your turn"
       : "Opponent thinking…"
-    : gameOver
-      ? (game.stacks.bottom <= 0
-          ? "Game over — Opponent wins"
-          : "Game over — You win")
+    : ((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver))
+      ? (displayGame.stacks[myActualSeat] <= 0
+          ? "Game over – Opponent wins"
+          : "Game over – You win")
       : "Hand ended (next hand in 5s)"}
 </span>
               </div>
@@ -3214,45 +3428,65 @@ const displayedHistoryBoard = viewingSnapshot
     <div className="text-xs font-normal text-white/70 tabular-nums whitespace-nowrap">
       {viewingSnapshot
         ? `You (${viewingSnapshot.heroPos}) ${formatBB(viewingSnapshot.heroStartStack)}bb · Opponent (${viewingSnapshot.oppPos}) ${formatBB(viewingSnapshot.oppStartStack)}bb`
-        : `You (${heroPosLabel}) ${formatBB(handStartStacks[mySeat])}bb · Opponent (${oppPosLabel}) ${formatBB(handStartStacks[mySeat === "bottom" ? "top" : "bottom"])}bb`}
+        : `You (${heroPosLabel}) ${formatBB(heroStartStack)}bb · Opponent (${oppPosLabel}) ${formatBB(oppStartStack)}bb`}
     </div>
   </div>
 
   {/* Current hand pinned right */}
   <div className="absolute right-4 top-1/2 -translate-y-1/2 text-xs text-white/70 tabular-nums whitespace-nowrap">
-  {`Hand #${
-  logViewOffset === 0
-    ? handId + 1
-    : (handLogHistory[logViewOffset - 1]?.handNo ?? handId) + 1
-}`}
-
+  {logViewOffset === 0
+    ? `Hand #${(multiplayerActive && mpState ? mpState.handId : handId) + 1}`
+    : `Hand #${(handLogHistory[logViewOffset - 1]?.handNo ?? 0) + 1}`}
 </div>
 </div>
 
   {/* Snapshot extras (ONLY when viewing history) */}
 {viewingSnapshot ? (
-  <div className="mb-3 flex items-start gap-4">
-    <div className="flex flex-col gap-1 text-xs text-white/70 whitespace-nowrap">
-      <div>
-        You:{" "}
-        {renderActionText(
-          `${cardStr(viewingSnapshot.heroCards[0])} ${cardStr(viewingSnapshot.heroCards[1])}`
-        )}
-      </div>
+  <div className="mb-3 flex flex-col gap-2">
+    <div className="flex items-start gap-4">
+      <div className="flex flex-col gap-1 text-xs text-white/70 whitespace-nowrap">
+        <div>
+          You:{" "}
+          {renderActionText(
+            `${cardStr(viewingSnapshot.heroCards[0])} ${cardStr(viewingSnapshot.heroCards[1])}`
+          )}
+          {viewingSnapshot.heroBest5 && (
+            <span className="ml-2 opacity-60">
+              → {viewingSnapshot.heroBest5.map(cardStr).join(" ")}
+            </span>
+          )}
+        </div>
 
-      <div>
-  Opponent:{" "}
-  {viewingSnapshot.oppShown
-    ? renderActionText(
-        `${cardStr(viewingSnapshot.oppCards[0])} ${cardStr(viewingSnapshot.oppCards[1])}`
-      )
-    : viewingSnapshot.log.some(
-        (it) => it.seat === "top" && /fold/i.test(it.text)
-      )
-    ? "Folded"
-    : "Mucked"}
-    </div>
-    </div>
+        <div>
+          Opponent:{" "}
+          {viewingSnapshot.oppShown
+            ? renderActionText(
+                `${cardStr(viewingSnapshot.oppCards[0])} ${cardStr(viewingSnapshot.oppCards[1])}`
+              )
+            : viewingSnapshot.log.some(
+                (it) => it.seat === oppActualSeat && /fold/i.test(it.text)
+              )
+            ? "Folded"
+            : "Mucked"}
+          {viewingSnapshot.oppShown && viewingSnapshot.oppBest5 && (
+            <span className="ml-2 opacity-60">
+              → {viewingSnapshot.oppBest5.map(cardStr).join(" ")}
+            </span>
+          )}
+        </div>
+      </div>
+    
+    {viewingSnapshot.heroHandDesc && (
+      <div className="text-xs text-white/60 pl-1">
+        You: {viewingSnapshot.heroHandDesc}
+      </div>
+    )}
+    {viewingSnapshot.oppShown && viewingSnapshot.oppHandDesc && (
+      <div className="text-xs text-white/60 pl-1">
+        Opponent: {viewingSnapshot.oppHandDesc}
+      </div>
+    )}
+  </div>
 
     <div className="flex items-center gap-2 min-w-0 overflow-hidden">
       {displayedHistoryBoard.map((c, i) => (
@@ -3388,57 +3622,71 @@ const displayedHistoryBoard = viewingSnapshot
   ) : null}
 </div>
 
-
                 </div>
               </div>
             </div>
           </div>
 
           {/* ACTION PANEL (bottom-right) */}
-          {isBottomTurn && (
+          {displayToAct === mySeat && displayHandResult.status === "playing" && (
             <div className="fixed bottom-6 right-6 z-50 flex w-[320px] flex-col gap-3">
-              <div className="rounded-2xl border bg-white p-3 text-black shadow-sm">
-                <div className="mb-2 flex items-center justify-between">
-                  <div className="text-sm font-semibold">{facingBetBottom ? "Raise to" : "Bet to"}</div>
-                  <div className="text-sm font-bold tabular-nums">{formatBB(safeBetSize)} BB</div>
-                </div>
+              {displayGame.stacks[myActualSeat] > bottomCallAmt && (
+                <div className="rounded-2xl border bg-white p-3 text-black shadow-sm">
+                  <div className="mb-2 flex items-center justify-between">
+                    <div className="text-sm font-semibold">{facingBetBottom ? "Raise to" : "Bet to"}</div>
+                    <div className="text-sm font-bold tabular-nums">{formatBB(displayBetSize)} BB</div>
+                  </div>
 
-                <div className="flex items-center gap-3 min-w-0">
-                  <input
-                    type="range"
-                    min={0}
-                    max={bottomMaxTo}
-                    step={0.01}
-                    value={betSize === "" ? 0 : betSize}
-                    onChange={(e) => setBetSizeRounded(Number(e.target.value))}
-                    className="w-full"
-                  />
+                  <div className="flex items-center gap-3 min-w-0">
+                    <input
+                      type="range"
+                      min={bottomMinRaise}
+                      max={bottomMaxTo}
+                      step={0.01}
+                      value={betSize === "" ? bottomMinRaise : Math.max(betSize, bottomMinRaise)}
+                      onChange={(e) => setBetSizeRounded(Number(e.target.value))}
+                      className="w-full"
+                    />
 
-                  <input
-                    type="number"
-                    step="0.01"
-                    inputMode="decimal"
-                    value={betSize}
-                    placeholder="0"
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      if (val === "") setBetSize("");
-                      else setBetSize(val === "-" ? "" : Number(val));
-                    }}
-                    onBlur={() => {
-                      if (betSize === "") setBetSizeRounded(defaultTo);
-                      else setBetSizeRounded(betSize);
-                    }}
-                    className="w-24 rounded-xl border px-2 py-1 text-sm tabular-nums"
-                  />
+                    <input
+                      type="number"
+                      step="0.01"
+                      inputMode="decimal"
+                      min={0.01}
+                      max={bottomMaxTo}
+                      value={betSize === "" ? "" : betSize}
+                      placeholder=""
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === "") {
+                          setBetSize("");
+                        } else {
+                          const num = Number(val);
+                          // Allow any number up to max, don't enforce minimum during typing
+                          if (num > 0) {
+                            setBetSize(Math.min(num, bottomMaxTo));
+                          }
+                        }
+                      }}
+                      onBlur={() => {
+                        // On blur, enforce minimum
+                        if (betSize === "" || betSize < bottomMinRaise) {
+                          setBetSizeRounded(isOpeningAction && displayStreet > 0 ? 2 : bottomMinRaise);
+                        } else {
+                          setBetSizeRounded(Math.min(betSize, bottomMaxTo));
+                        }
+                      }}
+                      className="w-24 rounded-xl border px-2 py-1 text-sm tabular-nums"
+                    />
+                  </div>
                 </div>
-              </div>
+              )}
 
               <div className="flex justify-end gap-3">
                 <button
   type="button"
   onClick={() => dispatchAction({ type: "FOLD" })}
-  disabled={!isBottomTurn && !(multiplayerActive && mpState?.toAct === mySeat)}
+  disabled={!(displayToAct === mySeat && displayHandResult.status === "playing")}
   className="h-[64px] w-[100px] rounded-2xl border bg-white px-4 py-3 text-sm font-semibold text-black shadow-sm hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
 >
   Fold
@@ -3449,7 +3697,7 @@ const displayedHistoryBoard = viewingSnapshot
   onClick={() =>
   dispatchAction(facingBetBottom ? { type: "CALL" } : { type: "CHECK" })
 }
-  disabled={!isBottomTurn && !(multiplayerActive && mpState?.toAct === mySeat)}
+  disabled={!(displayToAct === mySeat && displayHandResult.status === "playing")}
   className="flex h-[64px] w-[100px] flex-col items-center justify-center rounded-2xl border bg-white px-4 py-3 text-sm font-semibold text-black shadow-sm hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
 >
   <div>{facingBetBottom ? "Call" : "Check"}</div>
@@ -3461,10 +3709,14 @@ const displayedHistoryBoard = viewingSnapshot
   )}
 </button>
 
-                <button
+                {displayGame.stacks[myActualSeat] > bottomCallAmt && (
+                  <button
   type="button"
-  onClick={() => dispatchAction({ type: "BET_RAISE_TO", to: safeBetSize })}
-  disabled={!isBottomTurn && !(multiplayerActive && mpState?.toAct === mySeat)}
+  onClick={() => {
+    const finalSize = betSize === "" ? defaultTo : Math.max(betSize, bottomMinRaise);
+    dispatchAction({ type: "BET_RAISE_TO", to: finalSize });
+  }}
+  disabled={!(displayToAct === mySeat && displayHandResult.status === "playing")}
   className="flex h-[64px] w-[100px] flex-col items-center justify-center rounded-2xl border bg-white px-4 py-3 text-sm font-semibold text-black shadow-sm hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
 >
   <div className="text-sm leading-tight">
@@ -3472,9 +3724,10 @@ const displayedHistoryBoard = viewingSnapshot
   </div>
 
   <div className="mt-0.5 w-full text-center text-xs font-bold tabular-nums">
-    {formatBB(safeBetSize)} BB
+    {formatBB(displayBetSize)} BB
   </div>
 </button>
+                )}
               </div>
             </div>
           )}
