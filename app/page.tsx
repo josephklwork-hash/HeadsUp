@@ -3522,7 +3522,7 @@ const displayedHistoryBoard = viewingSnapshot
   }}
 />
 
-      <main className="relative flex min-h-screen items-center justify-center bg-black px-6 py-2">
+      <main className="relative flex min-h-screen items-center justify-center bg-black px-6 py-2" style={{ minHeight: '100vh' }}>
 
       {((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver)) && !playAgainRequested && (
   <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50">
@@ -3832,9 +3832,9 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
 </div>
 
             {/* CENTER: TABLE */}
-            <div className="mx-auto flex w-fit flex-col items-center gap-4 lg:gap-[92px]">
+            <div className="mx-auto flex w-fit flex-col items-center gap-[92px] scale-[0.65] md:scale-[0.8] lg:scale-100 origin-center">
               {/* TOP SEAT (Opponent) */}
-              <div className="relative h-[170px] w-[145px] lg:h-[260px] lg:w-[216px] translate-y-3 lg:translate-y-6 rounded-3xl border border-white/20 bg-black/50 text-center">
+              <div className="relative h-[260px] w-[216px] translate-y-6 rounded-3xl border border-white/20 bg-black/50 text-center">
                 {!amIDealer && <div className={dealerChipTop}>D</div>}
 
                 <div className="absolute -bottom-14 left-1/2 -translate-x-1/2">
@@ -3881,7 +3881,7 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
               </div>
 
               {/* BOARD (always current hand) */}
-<div className="flex h-20 lg:h-40 items-center justify-center">
+<div className="flex h-40 items-center justify-center">
   <div className="flex gap-3">
     {board.slice(0, displayStreet).map((c, i) => (
       <CardTile key={i} card={c} />
@@ -3890,7 +3890,7 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
 </div>
 
               {/* BOTTOM SEAT (You) */}
-              <div className="relative h-[170px] w-[145px] lg:h-[260px] lg:w-[216px] -translate-y-3 lg:-translate-y-6 rounded-3xl border border-white/20 bg-black/50 text-center">
+              <div className="relative h-[260px] w-[216px] -translate-y-6 rounded-3xl border border-white/20 bg-black/50 text-center">
                 {amIDealer && <div className={dealerChipBottom}>D</div>}
 
                 <div className="absolute -top-14 left-1/2 -translate-x-1/2">
