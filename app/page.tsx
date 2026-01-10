@@ -811,14 +811,9 @@ useEffect(() => {
   streetRef.current = street;
 }, [street]);
 
+// Set page title
 useEffect(() => {
-  (async () => {
-    try {
-      await getOrCreateUser(); // pre-warm auth session
-    } catch (e) {
-      console.error("prewarm auth failed:", e);
-    }
-  })();
+  document.title = 'HeadsUp';
 }, []);
 
 // Watch for game status changes (for host waiting for joiner)
