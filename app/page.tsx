@@ -869,12 +869,10 @@ useEffect(() => {
 });
         setMpHost(host);
         
-        // Start the first hand after a delay (let joiner connect)
-        setTimeout(() => {
-          host.startHand();
-          // Update our own display with host's state
-          setMpState(JSON.parse(JSON.stringify(host.getState())));
-        }, 500);
+        // Start the first hand immediately - joiner will request when ready
+        host.startHand();
+        // Update our own display with host's state
+        setMpState(JSON.parse(JSON.stringify(host.getState())));
         
       } else {
         // JOINER: Create joiner controller
@@ -1644,6 +1642,14 @@ const youRaw2 = mySeat === "bottom" ? bottomRaw2 : topRaw2;
   const board = viewingSnapshot 
     ? viewingSnapshot.endedBoard 
     : (displayCards ? displayCards.slice(4, 9) : []);
+  
+  // Debug: Check if joiner hasn't received state yet
+  if (multiplayerActive && !isHost && !mpState) {
+    console.warn('JOINER: Waiting for initial state from host...');
+  }
+  if (multiplayerActive && !isHost && mpState && !mpState.cards) {
+    console.error('JOINER: Received state but cards are null!', mpState);
+  }
 
   const heroHandRank = useMemo(() => {
   if (!youC || !youD) return null;
@@ -2662,7 +2668,7 @@ return [snap, ...prev].slice(0, 30);
   if (!multiplayerActive) {
     startNewHand();
   }
-}, 10000);
+}, 8000);
 
 
   return () => {
@@ -3547,7 +3553,7 @@ const displayedHistoryBoard = viewingSnapshot
       ? (displayGame.stacks[myActualSeat] <= 0
           ? "Game over – Opponent wins"
           : "Game over – You win")
-      : "Hand ended (next hand in 10s)"}
+      : "Hand ended (next hand in 8s)"}
 </span>
               </div>
               {handResult.message ? (

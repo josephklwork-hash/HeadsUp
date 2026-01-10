@@ -69,7 +69,7 @@ export class MultiplayerJoiner {
       }).catch((err) => {
         console.error("Request failed:", err);
       });
-    }, 150);
+    }, 300);
   }
   
   /**

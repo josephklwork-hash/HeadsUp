@@ -669,6 +669,17 @@ if (this.onStateChange) {
     
     this.state.oppRevealed = true;
     
+    // Log both players showing their cards at showdown
+    const topCardStr = topCards.length === 2 
+      ? `${topCards[0].rank}${topCards[0].suit} ${topCards[1].rank}${topCards[1].suit}`
+      : "";
+    const bottomCardStr = bottomCards.length === 2
+      ? `${bottomCards[0].rank}${bottomCards[0].suit} ${bottomCards[1].rank}${bottomCards[1].suit}`
+      : "";
+    
+    if (topCardStr) this.logAction("top", `Shows ${topCardStr}`);
+    if (bottomCardStr) this.logAction("bottom", `Shows ${bottomCardStr}`);
+    
     // Award pot
     const potSize = this.state.game.pot + this.state.game.bets.top + this.state.game.bets.bottom;
     
