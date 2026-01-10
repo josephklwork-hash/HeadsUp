@@ -2848,22 +2848,6 @@ const joinGame = () => {
   ) : null
 )}
 
-  {!gamePin && (
-  <button
-    type="button"
-    onClick={() => {
-  clearTimers();
-  if (!multiplayerActive) {
-    resetGame();
-  }
-  setSeatedRole((prev) => prev ?? "student");
-  setScreen("game");
-}}
-    className="text-sm font-semibold text-white underline opacity-80 hover:opacity-100"
-  >
-    Go to game
-  </button>
-)}
 </div>
 
       <div className="w-full max-w-xl flex flex-col">
