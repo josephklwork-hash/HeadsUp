@@ -18,12 +18,17 @@ export class MultiplayerJoiner {
   
   // Current state (received from host)
   private state: HostState | null = null;
+
+  private opponentQuit: boolean = false;
+  private onOpponentQuit?: () => void;
   
   constructor(
     channel: RealtimeChannel,
     userId: string,
-    onStateUpdate: (state: HostState) => void
+    onStateUpdate: (state: HostState) => void,
+    onOpponentQuit?: () => void
   ) {
+    this.onOpponentQuit = onOpponentQuit;
     this.channel = channel;
     this.userId = userId;
     this.onStateUpdate = onStateUpdate;
@@ -47,6 +52,14 @@ export class MultiplayerJoiner {
         this.state = payload.state as HostState;
         this.onStateUpdate(this.state);
         console.log("Received HOST_STATE from host");
+      }
+      
+      // Handle opponent quit
+      if (payload.event === "PLAYER_QUIT") {
+        this.opponentQuit = true;
+        if (this.onOpponentQuit) {
+          this.onOpponentQuit();
+        }
       }
     });
   }
@@ -123,6 +136,16 @@ export class MultiplayerJoiner {
    * Clean up
    */
   public destroy() {
-    // Any cleanup needed
+    // Broadcast quit message
+    this.channel.send({
+      type: "broadcast",
+      event: "mp",
+      payload: {
+        event: "PLAYER_QUIT",
+        sender: this.userId,
+      },
+    }).catch(() => {
+      // Ignore errors on cleanup
+    });
   }
 }

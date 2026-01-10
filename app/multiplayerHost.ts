@@ -226,11 +226,13 @@ export class MultiplayerHost {
   private readonly BLINDS_INCREASE_EVERY_N_HANDS = GAME_CONFIG.BLINDS_INCREASE_EVERY_N_HANDS;
   
   private onStateChange?: () => void;
+  private onOpponentQuit?: () => void;
 
-constructor(channel: RealtimeChannel, userId: string, initialDealerOffset: 0 | 1, onStateChange?: () => void) {
+constructor(channel: RealtimeChannel, userId: string, initialDealerOffset: 0 | 1, onStateChange?: () => void, onOpponentQuit?: () => void) {
   this.channel = channel;
   this.userId = userId;
   this.onStateChange = onStateChange;
+  this.onOpponentQuit = onOpponentQuit;
   
   // Initialize game state
   this.state = this.createInitialState(initialDealerOffset);
@@ -316,6 +318,14 @@ private createInitialState(initialDealerOffset: 0 | 1): HostState {
         // Notify host to update its display
         if (this.onStateChange) {
           this.onStateChange();
+        }
+      }
+      
+      // Handle joiner quit
+      if (payload.event === "PLAYER_QUIT") {
+        console.log("Host received PLAYER_QUIT from joiner");
+        if (this.onOpponentQuit) {
+          this.onOpponentQuit();
         }
       }
     });
@@ -667,7 +677,40 @@ if (this.onStateChange) {
       message: winner === "bottom" ? "You win" : winner === "top" ? "Opponent wins" : "Tie",
     };
     
-    this.state.oppRevealed = true;
+    // Determine show order: OOP shows first on check-check river, otherwise last aggressor shows first
+    const dealerSeat = this.state.dealerOffset === 0 ? "top" : "bottom";
+    const nonDealerSeat = dealerSeat === "top" ? "bottom" : "top";
+    
+    // Check if river was checked through (both checked and no betting on river)
+    const riverCheckedThrough = this.state.checked.top && this.state.checked.bottom && 
+                                 this.state.lastAggressor === null;
+    
+    const firstToShow: Seat = riverCheckedThrough ? nonDealerSeat : (this.state.lastAggressor || nonDealerSeat);
+    const secondToShow: Seat = firstToShow === "top" ? "bottom" : "top";
+    
+    // Second player only shows if they win or tie (can muck if they lose)
+    const secondShows = winner === "tie" || winner === secondToShow;
+    
+    const topShows = firstToShow === "top" || (secondToShow === "top" && secondShows);
+    const bottomShows = firstToShow === "bottom" || (secondToShow === "bottom" && secondShows);
+    
+    // Set which cards are revealed in UI
+
+    this.state.oppRevealed = topShows;
+    this.state.youMucked = !bottomShows;
+
+    // Show Hand button: only losers who mucked can optionally show
+    if (winner === "tie") {
+      // Tie: both already showed, no Show Hand button
+      this.state.canShowTop = false;
+      this.state.canShowBottom = false;
+    } else {
+      // Winner already showed, loser can show if they mucked
+      this.state.canShowTop = (winner !== "top" && !topShows);
+      this.state.canShowBottom = (winner !== "bottom" && !bottomShows);
+    }
+    this.state.topShowed = false;
+    this.state.bottomShowed = false;
     
     // Log both players showing their cards at showdown
     const topCardStr = topCards.length === 2 
@@ -677,8 +720,24 @@ if (this.onStateChange) {
       ? `${bottomCards[0].rank}${bottomCards[0].suit} ${bottomCards[1].rank}${bottomCards[1].suit}`
       : "";
     
-    if (topCardStr) this.logAction("top", `Shows ${topCardStr}`);
-    if (bottomCardStr) this.logAction("bottom", `Shows ${bottomCardStr}`);
+    // First player always shows
+    if (firstToShow === "top" && topCardStr) {
+      this.logAction("top", `Shows ${topCardStr}`);
+    } else if (firstToShow === "bottom" && bottomCardStr) {
+      this.logAction("bottom", `Shows ${bottomCardStr}`);
+    }
+    
+    // Second player shows only if they win or tie
+    if (secondShows) {
+      if (secondToShow === "top" && topCardStr) {
+        this.logAction("top", `Shows ${topCardStr}`);
+      } else if (secondToShow === "bottom" && bottomCardStr) {
+        this.logAction("bottom", `Shows ${bottomCardStr}`);
+      }
+    } else {
+      // Second player mucks
+      this.logAction(secondToShow, "Mucked");
+    }
     
     // Award pot
     const potSize = this.state.game.pot + this.state.game.bets.top + this.state.game.bets.bottom;
@@ -803,6 +862,16 @@ if (this.onStateChange) {
    * Clean up
    */
   public destroy() {
-    // Any cleanup needed
+    // Broadcast quit message
+    this.channel.send({
+      type: "broadcast",
+      event: "mp",
+      payload: {
+        event: "PLAYER_QUIT",
+        sender: this.userId,
+      },
+    }).catch(() => {
+      // Ignore errors on cleanup
+    });
   }
 }

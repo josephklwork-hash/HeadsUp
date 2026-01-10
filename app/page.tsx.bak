@@ -478,16 +478,16 @@ function ConfirmModal({
 
         <div className="flex justify-end gap-3">
           <button
-            onClick={onConfirm}
-            className="rounded-2xl border px-4 py-2 text-sm font-semibold text-gray-900 transition-colors hover:bg-gray-200"
-          >
-            {confirmText}
-          </button>
-          <button
             onClick={onCancel}
             className="rounded-2xl border px-4 py-2 text-sm font-semibold text-gray-900 transition-colors hover:bg-gray-200"
           >
             {cancelText}
+          </button>
+          <button
+            onClick={onConfirm}
+            className="rounded-2xl border px-4 py-2 text-sm font-semibold text-gray-900 transition-colors hover:bg-gray-200"
+          >
+            {confirmText}
           </button>
         </div>
       </div>
@@ -696,9 +696,6 @@ const setStreetBettor = (next: any) =>
 
   const [cards, setCards] = useState<Card[] | null>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
-  const [showFoldConfirm, setShowFoldConfirm] = useState(false);
-  const [showTitleScreenConfirm, setShowTitleScreenConfirm] = useState(false);
-  const [opponentQuit, setOpponentQuit] = useState(false);
 
   const [handLogHistory, setHandLogHistory] = useState<HandLogSnapshot[]>([]);
   const [logViewOffset, setLogViewOffset] = useState(0);
@@ -866,19 +863,10 @@ useEffect(() => {
       // Initialize the appropriate controller
       if (isHost) {
         // HOST: Create host controller
-        const host = new MultiplayerHost(
-          ch, 
-          sbUser?.id ?? 'host', 
-          dealerOffset, 
-          () => {
-            // When controller processes joiner's action, update host's display
-            setMpState(JSON.parse(JSON.stringify(host.getState())));
-          },
-          () => {
-            // Opponent quit
-            setOpponentQuit(true);
-          }
-        );
+        const host = new MultiplayerHost(ch, sbUser?.id ?? 'host', dealerOffset, () => {
+  // When controller processes joiner's action, update host's display
+  setMpState(JSON.parse(JSON.stringify(host.getState())));
+});
         setMpHost(host);
         
         // Start the first hand immediately - joiner will request when ready
@@ -894,10 +882,6 @@ useEffect(() => {
           (state: HostState) => {
             // When we receive state from host, update our display
             setMpState(state);
-          },
-          () => {
-            // Opponent quit
-            setOpponentQuit(true);
           }
         );
         setMpJoiner(joiner);
@@ -2554,19 +2538,12 @@ useEffect(() => {
     return true;
   })();
   
-  // oppRevealed is from host's perspective (host = bottom, so oppRevealed = top showed)
-  // If I'm top (joiner), then oppRevealed means I showed, not opponent
-  // If I'm bottom (host), then oppRevealed means opponent showed
-  const oppShown = (
-    // At showdown, check if opponent was required to show
-    (mpState.handResult.reason === "showdown" && (
-      mySeat === "bottom" 
-        ? mpState.oppRevealed  // I'm host: oppRevealed = top showed = opponent showed
-        : !mpState.youMucked   // I'm joiner: youMucked = bottom mucked = opponent mucked, so !youMucked = opponent showed
-    ))
-    // OR if opponent clicked Show Hand button
-    || (mySeat === "bottom" ? mpState.topShowed : mpState.bottomShowed)
-  );
+  const oppShown = (() => {
+    const log = mpState.actionLog;
+    // Opponent cards ONLY show if: they explicitly clicked "Show Hand"
+    const oppShowedCards = log.some((it) => it.seat === oppActualSeat && it.text.startsWith("Shows "));
+    return oppShowedCards;
+  })();
   
   const snap: HandLogSnapshot = {
     handNo: mpState.handId,
@@ -2875,7 +2852,7 @@ const joinGame = () => {
 
       <div className="w-full max-w-xl flex flex-col">
         <h1 className="h-[44px] mb-8 text-center text-3xl font-bold leading-[44px]">
-          HeadsUp
+          TEMP TITLE2
         </h1>
 
       <div className="h-[220px] flex flex-col justify-start">
@@ -3499,52 +3476,6 @@ const displayedHistoryBoard = viewingSnapshot
 }}
 />
 
-<ConfirmModal
-  open={showFoldConfirm}
-  title="Fold hand?"
-  message="Are you sure you would like to fold? If you fold, you will forfeit your share of the pot."
-  cancelText="Go back"
-  confirmText="Fold"
-  onCancel={() => setShowFoldConfirm(false)}
-  onConfirm={() => {
-    setShowFoldConfirm(false);
-    dispatchAction({ type: "FOLD" });
-  }}
-/>
-
-<ConfirmModal
-  open={showTitleScreenConfirm}
-  title="Go to Title Screen?"
-  message="Are you sure you'd like to go to the Title Screen? If you do, the game will end and stack sizes and positions will reset."
-  cancelText="Go back"
-  confirmText="Confirm"
-  onCancel={() => setShowTitleScreenConfirm(false)}
-  onConfirm={() => {
-    setShowTitleScreenConfirm(false);
-    
-    // Cleanup multiplayer and broadcast quit
-    if (mpHost) {
-      mpHost.destroy();
-      setMpHost(null);
-    }
-    if (mpJoiner) {
-      mpJoiner.destroy();
-      setMpJoiner(null);
-    }
-    setMultiplayerActive(false);
-    setOpponentQuit(false);
-    
-    clearTimers();
-    clearPin();
-    setGamePin(null);
-    setJoinMode(false);
-    setJoinPinInput("");
-    setOtherStudents([]);
-    setOtherProfessionals([]);
-    setScreen("role");
-  }}
-/>
-
       <main className="relative flex min-h-screen items-center justify-center px-6">
 
       {((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver)) && !playAgainRequested && (
@@ -3566,7 +3497,8 @@ const displayedHistoryBoard = viewingSnapshot
 
 {/* Show Hand Button */}
 {displayHandResult.status === "ended" && 
- canIShow &&
+ displayHandResult.reason === "fold" && 
+ canIShow && 
  !didIShow && 
  !((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver)) && (
   <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50">
@@ -3607,22 +3539,20 @@ const displayedHistoryBoard = viewingSnapshot
         <div className="w-full max-w-6xl">
           <div className="mb-6 flex items-center justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-white">HeadsUp</h1>
+              <h1 className="text-2xl font-bold text-white">TEMP TITLE2</h1>
               <div className="text-sm text-white opacity-80 tabular-nums">
                 Pot: {formatBB(roundToHundredth(displayGame.pot + displayGame.bets.top + displayGame.bets.bottom))}{" "}
                 BB <span className="opacity-60">·</span> {streetLabel}{" "}
                 <span className="opacity-60">·</span>{" "}
                 <span className="opacity-90">
-  {opponentQuit
-    ? "Opponent Quit!"
-    : displayHandResult.status === "playing"
+  {displayHandResult.status === "playing"
     ? displayToAct === mySeat
       ? "Your turn"
       : "Opponent thinking…"
     : ((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver))
       ? (displayGame.stacks[myActualSeat] <= 0
-          ? "Game over — Opponent wins"
-          : "Game over — You win")
+          ? "Game over – Opponent wins"
+          : "Game over – You win")
       : "Hand ended (next hand in 8s)"}
 </span>
               </div>
@@ -3632,57 +3562,70 @@ const displayedHistoryBoard = viewingSnapshot
             </div>
 
             <div className="flex items-center gap-4">
+  <button
+    type="button"
+    onClick={() => setShowResetConfirm(true)}
+    className="text-sm text-white underline opacity-80 hover:opacity-100"
+  >
+    Reset game
+  </button>
 
   {studentProfile.email && !gamePin && (
   <button
-type="button"
-onClick={() =>
-setScreen(seatedRole === "professional" ? "professionalDashboard" : "dashboard")
-}
-className="text-sm text-white underline opacity-80 hover:opacity-100"
->
+    type="button"
+    onClick={() =>
+      setScreen(seatedRole === "professional" ? "professionalDashboard" : "dashboard")
+    }
+    className="text-sm text-white underline opacity-80 hover:opacity-100"
+  >
     Dashboard
-</button>
+  </button>
 )}
 
   <button
     type="button"
     onClick={() => {
-      if (opponentQuit) {
-        // Opponent already quit, go directly to title screen
-        if (mpHost) {
-          mpHost.destroy();
-          setMpHost(null);
-        }
-        if (mpJoiner) {
-          mpJoiner.destroy();
-          setMpJoiner(null);
-        }
-        setMultiplayerActive(false);
-        setOpponentQuit(false);
-        clearTimers();
-        clearPin();
-        setGamePin(null);
-        setJoinMode(false);
-        setJoinPinInput("");
-        setOtherStudents([]);
-        setOtherProfessionals([]);
-        setScreen("role");
-      } else {
-        // Show confirmation modal
-        setShowTitleScreenConfirm(true);
-      }
-    }}
+  clearTimers();                 // stop opponent + next-hand timers
+  setOtherStudents([]);          // wipe mock students
+  setOtherProfessionals([]);     // wipe mock professionals
+  setScreen("role");             // go back to title screen
+}}
     className="text-sm text-white underline opacity-80 hover:opacity-100"
   >
     Title screen
   </button>
 
-{opponentQuit && (
-<div className="text-sm text-white opacity-90">
-      Opponent Quit, Go To Title Screen
-</div>
-  )}
+<button
+  type="button"
+  disabled={!!gamePin}
+  onClick={() => {
+    if (gamePin) return;
+
+    // If turning AI OFF
+    if (aiEnabled) {
+      const opponentTurn = handResult.status === "playing" && toAct === "top";
+
+      if (opponentTurn) {
+        pendingAiOffRef.current = true;
+        return;
+      }
+
+      pendingAiOffRef.current = false;
+      clearTimers();
+      setAiEnabled(false);
+      return;
+    }
+
+    pendingAiOffRef.current = false;
+    clearTimers();
+    setAiEnabled(true);
+  }}
+  className={`text-sm text-white underline opacity-80 hover:opacity-100 ${
+    gamePin ? "opacity-40 cursor-not-allowed pointer-events-none" : ""
+  }`}
+>
+  AI: {aiEnabled ? "ON" : "OFF"}
+</button>
 
 </div>
           </div>
@@ -3739,14 +3682,24 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
         <div>
           You:{" "}
           {viewingSnapshot ? (
-            `${cardStr(viewingSnapshot.heroCards[0])} ${cardStr(viewingSnapshot.heroCards[1])}`
+            viewingSnapshot.heroShown
+              ? renderActionText(
+                  `${cardStr(viewingSnapshot.heroCards[0])} ${cardStr(viewingSnapshot.heroCards[1])}`
+                )
+              : viewingSnapshot.log.some(
+                  (it) => it.seat === myActualSeat && /fold/i.test(it.text)
+                )
+              ? "Folded"
+              : "Mucked"
           ) : (
-            // Current hand display - always show your cards
-            youC && youD
+            // Current hand display
+            !displayYouMucked && youC && youD
               ? renderActionText(`${cardStr(youC)} ${cardStr(youD)}`)
-              : "No cards"
+              : displayActionLog.some((it) => it.seat === myActualSeat && /fold/i.test(it.text))
+              ? "Folded"
+              : "Mucked"
           )}
-          {viewingSnapshot?.heroBest5 && (
+          {viewingSnapshot?.heroShown && viewingSnapshot.heroBest5 && (
             <span className="ml-2 opacity-60">
               → {viewingSnapshot.heroBest5.map(cardStr).join(" ")}
             </span>
@@ -3757,7 +3710,9 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
           Opponent:{" "}
           {viewingSnapshot ? (
             viewingSnapshot.oppShown
-              ? <>{renderActionText(`${cardStr(viewingSnapshot.oppCards[0])} ${cardStr(viewingSnapshot.oppCards[1])}`)}</>
+              ? renderActionText(
+                  `${cardStr(viewingSnapshot.oppCards[0])} ${cardStr(viewingSnapshot.oppCards[1])}`
+                )
               : viewingSnapshot.log.some(
                   (it) => it.seat === oppActualSeat && /fold/i.test(it.text)
                 )
@@ -3765,16 +3720,7 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
               : "Mucked"
           ) : (
             // Current hand display
-            displayHandResult.status === "ended" && (
-              // Showdown: check if opponent was required to show
-              (displayHandResult.reason === "showdown" && (
-                mySeat === "bottom" 
-                  ? displayOppRevealed
-                  : !displayYouMucked
-              ))
-              // OR opponent clicked Show Hand button
-              || didOppShow
-            ) && oppA && oppB
+            (displayOppRevealed || didOppShow) && oppA && oppB
               ? renderActionText(`${cardStr(oppA)} ${cardStr(oppB)}`)
               : displayActionLog.some((it) => it.seat === oppActualSeat && /fold/i.test(it.text))
               ? "Folded"
@@ -3782,13 +3728,13 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
           )}
           {viewingSnapshot?.oppShown && viewingSnapshot.oppBest5 && (
             <span className="ml-2 opacity-60">
-              → {renderActionText(viewingSnapshot.oppBest5.map(cardStr).join(" "))}
+              → {viewingSnapshot.oppBest5.map(cardStr).join(" ")}
             </span>
           )}
         </div>
       </div>
     
-    {viewingSnapshot?.heroHandDesc && (
+    {viewingSnapshot?.heroShown && viewingSnapshot.heroHandDesc && (
       <div className="text-xs text-white/60 pl-1">
         You: {viewingSnapshot.heroHandDesc}
       </div>
@@ -3876,16 +3822,7 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
                       // When viewing history, use snapshot's oppShown; otherwise use live state
                       (viewingSnapshot 
                         ? viewingSnapshot.oppShown 
-                        : (displayHandResult.status === "ended" && (
-                            // Showdown: check if opponent was required to show
-                            (displayHandResult.reason === "showdown" && (
-                              mySeat === "bottom" 
-                                ? displayOppRevealed
-                                : !displayYouMucked
-                            ))
-                            // OR opponent clicked Show Hand button
-                            || didOppShow
-                          ))
+                        : (displayHandResult.status === "ended" && (displayOppRevealed || didOppShow))
                       ) ? (
   <>
     <CardTile card={oppA} />
@@ -3937,7 +3874,7 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
                     // When viewing history, use snapshot's heroShown; otherwise use live state
                     (viewingSnapshot
                       ? !viewingSnapshot.heroShown
-                      : false  // Always show your own cards on your screen
+                      : (displayHandResult.status === "ended" && displayYouMucked && !didIShow)
                     ) ? (
                      <>
                       <CardBack />
@@ -4022,19 +3959,7 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
               <div className="flex justify-end gap-3">
                 <button
   type="button"
-  onClick={() => {
-    // Determine if fold warning should show
-    const facingBet = displayGame.bets[oppActualSeat] > displayGame.bets[myActualSeat];
-    
-    // Show warning when not facing a bet (can check for free)
-    const shouldWarn = !facingBet;
-    
-    if (shouldWarn) {
-      setShowFoldConfirm(true);
-    } else {
-      dispatchAction({ type: "FOLD" });
-    }
-  }}
+  onClick={() => dispatchAction({ type: "FOLD" })}
   disabled={!(displayToAct === mySeat && displayHandResult.status === "playing")}
   className="h-[64px] w-[100px] rounded-2xl border bg-white px-4 py-3 text-sm font-semibold text-black shadow-sm hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
 >
@@ -4062,7 +3987,7 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
                   <button
   type="button"
   onClick={() => {
-    const finalSize = betSize === "" || betSize < bottomMinRaise ? openingDefault : Math.max(betSize, bottomMinRaise);
+    const finalSize = betSize === "" ? defaultTo : Math.max(betSize, bottomMinRaise);
     dispatchAction({ type: "BET_RAISE_TO", to: finalSize });
   }}
   disabled={!(displayToAct === mySeat && displayHandResult.status === "playing")}
@@ -4098,29 +4023,16 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
 // think about whether the connection is successful through linkedin or my app itself? which one would it be easier? 
 // ADD SCHOOL FIELD IN SIGNUP
 
-// PRETTY MUCH READY TO START THE BACKEND? THE ACTUAL TESTING WITH REAL PEOPLE
-
-// Ask Wilson if he would like to do marketing for this 
-
 // Connect people's names to their Linkedin? Have like a (Connect your Linkedin and then the name becomes a hyperlink?)
 
 // Put pot tracker on a better location
 // Also made it so that the screen fits to all screen and accomodtaes its best
+// remove reset game
+// remove AI Toggle 
 // Remove Title Screen? but have a way to quit (besides refresh)
 // Have a way to connect back to the game if you happen to disconnect or refresh by accident 
 // ALso sb blind should be BB, the position is just called sb
 // Make play game button work
-// Supbase is IDE, Postgres for the ? (Auth? Database?)
-// MAc Dark mode affects white and back background I see (Add an explicit and no overriding of thematics) (Explicitly make it black/darkmode) (get people to get on safari vs chrome, on chrome it loks like white mode)
-// Make Automatic know that posting makes it right 
-// FOCUS ON SOUND WHEN MAKING IT FEEL NICE (GET INSPIRITATION FROM POKER)
-// Safety vs security? (Stats)
-// Put the fold warning in the middle of the game 
-// Make it so that people dont disconnect if they disconnect (local, session, cookies?) (Local storage is what I would want?)
 // Also I think Claude made some changes thats moves me on to the next steps? (just sql stuff)
-
-// I really like the name Headsup (Headsup!) ??
-
-// Accounts, acocunts going into a server, make like multiple game rooms, like a lobby
 
 // Ask Wilson if he would like to do marketing for this 
