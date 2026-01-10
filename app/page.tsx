@@ -441,11 +441,9 @@ function BetChip({ amount, label }: { amount: number; label?: string }) {
       <div className="text-[11px] font-bold leading-none tabular-nums">
         {formatBB(amount)}
       </div>
-      {label ? (
-        <div className="mt-[1px] text-[9px] font-semibold leading-none opacity-70">
-          {label}
-        </div>
-      ) : null}
+      <div className="mt-[1px] text-[9px] font-semibold leading-none opacity-70">
+        BB
+      </div>
     </div>
   );
 }
@@ -2753,7 +2751,7 @@ const joinGame = () => {
 };
 
   return (
-    <main className="relative flex min-h-screen items-center justify-center px-6">
+    <main className="relative flex min-h-screen items-center justify-center bg-black px-6">
 
     <div
   className={`absolute top-6 right-6 flex items-center gap-4 ${
@@ -2979,7 +2977,7 @@ const joinGame = () => {
 
 if (screen === "studentProfile") {
   return (
-    <main className="relative flex min-h-screen items-center justify-center px-6">
+    <main className="relative flex min-h-screen items-center justify-center bg-black px-6">
       <div className="w-full max-w-md">
         <h1 className="mb-6 text-center text-3xl font-bold">Sign up</h1>
 
@@ -3121,7 +3119,7 @@ if (screen === "studentProfile") {
 
 if (screen === "studentLogin") {
   return (
-    <main className="relative flex min-h-screen items-center justify-center px-6">
+    <main className="relative flex min-h-screen items-center justify-center bg-black px-6">
       <div className="w-full max-w-md">
         <h1 className="mb-6 text-center text-3xl font-bold">Log in</h1>
 
@@ -3164,7 +3162,7 @@ if (screen === "dashboard" && seatedRole === "student") {
     "w-full rounded-3xl border px-6 font-semibold transition-colors duration-200 hover:bg-gray-50 hover:border-gray-300";
 
   return (
-    <main className="flex min-h-screen justify-center px-6 pt-16">
+    <main className="flex min-h-screen justify-center bg-black px-6 pt-16">
   <div className="w-full max-w-[96rem]">
        <div className="mb-2 flex items-center justify-center gap-4">
   <h1 className="text-3xl font-bold">Student dashboard</h1>
@@ -3284,7 +3282,7 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
     "w-full rounded-3xl border px-6 font-semibold transition-colors duration-200 hover:bg-gray-50 hover:border-gray-300";
 
   return (
-    <main className="flex min-h-screen justify-center px-6 pt-16">
+   <main className="flex min-h-screen justify-center bg-black px-6 pt-16">
   <div className="w-full max-w-[96rem]">
        <div className="mb-2 flex items-center justify-center gap-4">
   <h1 className="text-3xl font-bold">Professional Dashboard</h1>
@@ -3545,7 +3543,7 @@ const displayedHistoryBoard = viewingSnapshot
   }}
 />
 
-      <main className="relative flex min-h-screen items-center justify-center px-6">
+      <main className="relative flex min-h-screen items-center justify-center bg-black px-6">
 
       {((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver)) && !playAgainRequested && (
   <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50">
@@ -3855,9 +3853,9 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
 </div>
 
             {/* CENTER: TABLE */}
-            <div className="mx-auto flex w-fit flex-col items-center gap-[92px]">
+            <div className="mx-auto flex w-fit flex-col items-center gap-8 md:gap-12 xl:gap-[92px]">
               {/* TOP SEAT (Opponent) */}
-              <div className="relative h-[260px] w-[216px] translate-y-6 rounded-3xl border bg-black/50 text-center">
+              <div className="relative h-[200px] w-[160px] md:h-[220px] md:w-[180px] xl:h-[260px] xl:w-[216px] translate-y-6 rounded-3xl border border-white/20 bg-black/50 text-center">
                 {!amIDealer && <div className={dealerChipTop}>D</div>}
 
                 <div className="absolute -bottom-14 left-1/2 -translate-x-1/2">
@@ -3904,7 +3902,7 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
               </div>
 
               {/* BOARD (always current hand) */}
-<div className="flex h-40 items-center justify-center">
+<div className="flex h-28 md:h-32 xl:h-40 items-center justify-center">
   <div className="flex gap-3">
     {board.slice(0, displayStreet).map((c, i) => (
       <CardTile key={i} card={c} />
@@ -3913,7 +3911,7 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
 </div>
 
               {/* BOTTOM SEAT (You) */}
-              <div className="relative h-[260px] w-[216px] -translate-y-6 rounded-3xl border bg-black/50 text-center">
+              <div className="relative h-[200px] w-[160px] md:h-[220px] md:w-[180px] xl:h-[260px] xl:w-[216px] -translate-y-6 rounded-3xl border border-white/20 bg-black/50 text-center">
                 {amIDealer && <div className={dealerChipBottom}>D</div>}
 
                 <div className="absolute -top-14 left-1/2 -translate-x-1/2">
@@ -4105,8 +4103,6 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
 // Connect people's names to their Linkedin? Have like a (Connect your Linkedin and then the name becomes a hyperlink?)
 
 // Put pot tracker on a better location
-// Also made it so that the screen fits to all screen and accomodtaes its best
-// Remove Title Screen? but have a way to quit (besides refresh)
 // Have a way to connect back to the game if you happen to disconnect or refresh by accident 
 // ALso sb blind should be BB, the position is just called sb
 // Make play game button work
