@@ -3522,7 +3522,7 @@ const displayedHistoryBoard = viewingSnapshot
   }}
 />
 
-      <main className="relative flex min-h-screen items-center justify-center bg-black px-6 py-4 md:py-6">
+      <main className="relative flex min-h-screen items-center justify-center bg-black px-6 py-2 md:py-6 overflow-hidden">
 
       {((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver)) && !playAgainRequested && (
   <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50">
@@ -3832,7 +3832,7 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
 </div>
 
             {/* CENTER: TABLE */}
-            <div className="mx-auto flex w-fit flex-col items-center gap-8 md:gap-12 xl:gap-[92px]">
+            <div className="mx-auto flex w-fit flex-col items-center gap-4 md:gap-8 xl:gap-[92px] scale-75 md:scale-90 xl:scale-100 origin-center">
               {/* TOP SEAT (Opponent) */}
               <div className="relative h-[200px] w-[160px] md:h-[220px] md:w-[180px] xl:h-[260px] xl:w-[216px] translate-y-6 rounded-3xl border border-white/20 bg-black/50 text-center">
                 {!amIDealer && <div className={dealerChipTop}>D</div>}
