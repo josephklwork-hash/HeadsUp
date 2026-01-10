@@ -3522,7 +3522,7 @@ const displayedHistoryBoard = viewingSnapshot
   }}
 />
 
-      <main className="relative flex min-h-screen items-center justify-center bg-black px-6">
+      <main className="relative flex min-h-screen items-center justify-center bg-black px-6 py-4 md:py-6">
 
       {((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver)) && !playAgainRequested && (
   <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50">
@@ -3582,7 +3582,7 @@ const displayedHistoryBoard = viewingSnapshot
   </div>
 ) : null}
         <div className="w-full max-w-6xl">
-          <div className="mb-6 flex items-center justify-between">
+          <div className="mb-3 md:mb-6 flex items-center justify-between">
             <div>
               <h1 className="text-2xl font-bold text-white">HeadsUp</h1>
               <div className="text-sm text-white opacity-80 tabular-nums">
@@ -3667,7 +3667,7 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
           {/* ACTION LOG pinned left + TABLE centered */}
           <div className="relative mt-6 w-full">
             {/* LEFT: ACTION LOG */}
-<div className="absolute -left-36 top-0 w-[500px] rounded-3xl border border-white/10 bg-black/20 p-4 text-white text-left">
+<div className="absolute -left-28 md:-left-36 top-0 w-[420px] md:w-[500px] rounded-3xl border border-white/10 bg-black/20 p-3 md:p-4 text-white text-left">
  {/* Header row (matches your target screenshot) */}
 <div className="mb-6 relative flex w-full items-center gap-4">
   {/* arrows */}
@@ -3943,7 +3943,7 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
 
           {/* ACTION PANEL (bottom-right) */}
           {displayToAct === mySeat && displayHandResult.status === "playing" && (
-            <div className="fixed bottom-6 right-6 z-50 flex w-[320px] flex-col gap-3">
+            <div className="fixed bottom-4 md:bottom-6 right-4 md:right-6 z-50 flex w-[280px] md:w-[320px] flex-col gap-2 md:gap-3">
               {displayGame.stacks[myActualSeat] > bottomCallAmt && displayGame.stacks[oppActualSeat] > 0 && (
                 <div className="rounded-2xl border bg-white p-3 text-black shadow-sm">
                   <div className="mb-2 flex items-center justify-between">
