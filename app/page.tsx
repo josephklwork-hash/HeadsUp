@@ -2647,17 +2647,23 @@ return [snap, ...prev].slice(0, 30);
 
   if (nextHandTimerRef.current) window.clearTimeout(nextHandTimerRef.current);
  nextHandTimerRef.current = window.setTimeout(() => {
-    if (multiplayerActive && isHost && mpHost) {
-      // Check one more time before starting
-      const currentState = mpHost.getState();
-      if (currentState.game.stacks.top > 0 && currentState.game.stacks.bottom > 0) {
-        mpHost.startHand();
-        setMpState(JSON.parse(JSON.stringify(mpHost.getState())));
-      }
-    } else if (!multiplayerActive) {
-      startNewHand();
+  if (multiplayerActive && isHost && mpHost) {
+    // Check one more time before starting
+    const currentState = mpHost.getState();
+    if (!currentState) return;
+
+    if (currentState.game.stacks.top > 0 && currentState.game.stacks.bottom > 0) {
+      mpHost.startHand();
+      setMpState(JSON.parse(JSON.stringify(mpHost.getState())));
     }
-  }, 10000);
+    return;
+  }
+
+  if (!multiplayerActive) {
+    startNewHand();
+  }
+}, 10000);
+
 
   return () => {
     if (nextHandTimerRef.current) {
