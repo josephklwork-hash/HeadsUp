@@ -382,11 +382,11 @@ const SUIT_COLOR: Record<string, string> = {
 function CardTile({ card }: { card: Card }) {
   const colorClass = SUIT_COLOR[card.suit];
   return (
-    <div className="relative h-24 w-16 rounded-xl border bg-white shadow-sm">
-      <div className={`absolute left-3 top-2 text-4xl font-extrabold ${colorClass}`}>
+    <div className="relative h-24 w-16 min-[1536px]:max-[1650px]:h-[75px] min-[1536px]:max-[1650px]:w-[50px] rounded-xl border bg-white shadow-sm">
+      <div className={`absolute left-3 top-2 min-[1536px]:max-[1650px]:left-2 min-[1536px]:max-[1650px]:top-1 text-4xl min-[1536px]:max-[1650px]:text-3xl font-extrabold ${colorClass}`}>
   {card.rank}
 </div>
-      <div className={`absolute bottom-3 right-3 text-4xl font-bold ${colorClass}`}>
+      <div className={`absolute bottom-3 right-3 min-[1536px]:max-[1650px]:bottom-2 min-[1536px]:max-[1650px]:right-2 text-4xl min-[1536px]:max-[1650px]:text-3xl font-bold ${colorClass}`}>
   {card.suit}
 </div>
     </div>
@@ -425,11 +425,10 @@ textShadow: `
   });
 }
 
-
 function CardBack() {
   return (
-    <div className="relative h-24 w-16 rounded-xl border bg-white shadow-sm">
-      <div className="absolute inset-2 rounded-lg border border-dashed opacity-40" />
+    <div className="relative h-24 w-16 min-[1536px]:max-[1650px]:h-[75px] min-[1536px]:max-[1650px]:w-[50px] rounded-xl border bg-white shadow-sm">
+      <div className="absolute inset-2 min-[1536px]:max-[1650px]:inset-1 rounded-lg border border-dashed opacity-40" />
     </div>
   );
 }
@@ -437,11 +436,11 @@ function CardBack() {
 function BetChip({ amount, label }: { amount: number; label?: string }) {
   if (amount <= 0) return null;
   return (
-    <div className="flex h-9 w-9 flex-col items-center justify-center rounded-full border bg-white text-black shadow-sm">
-      <div className="text-[11px] font-bold leading-none tabular-nums">
+    <div className="flex h-9 w-9 min-[1536px]:max-[1650px]:h-7 min-[1536px]:max-[1650px]:w-7 flex-col items-center justify-center rounded-full border bg-white text-black shadow-sm">
+      <div className="text-[11px] min-[1536px]:max-[1650px]:text-[9px] font-bold leading-none tabular-nums">
         {formatBB(amount)}
       </div>
-      <div className="mt-[1px] text-[9px] font-semibold leading-none opacity-70">
+      <div className="mt-[1px] text-[9px] min-[1536px]:max-[1650px]:text-[7px] font-semibold leading-none opacity-70">
         BB
       </div>
     </div>
@@ -470,20 +469,20 @@ function ConfirmModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center px-6">
       <div className="absolute inset-0 bg-black/50" onClick={onCancel} aria-hidden="true" />
-      <div className="relative w-full max-w-md rounded-3xl border border-gray-300 bg-gray-100 p-6 shadow-lg">
-        <h3 className="mb-2 text-lg font-bold text-gray-900">{title}</h3>
-        <p className="mb-6 text-sm text-gray-800">{message}</p>
+      <div className="relative w-full max-w-md min-[1536px]:max-[1650px]:max-w-[350px] rounded-3xl min-[1536px]:max-[1650px]:rounded-2xl border border-gray-300 bg-gray-100 p-6 min-[1536px]:max-[1650px]:p-4 shadow-lg">
+        <h3 className="mb-2 text-lg min-[1536px]:max-[1650px]:text-base font-bold text-gray-900">{title}</h3>
+        <p className="mb-6 min-[1536px]:max-[1650px]:mb-4 text-sm min-[1536px]:max-[1650px]:text-xs text-gray-800">{message}</p>
 
         <div className="flex justify-end gap-3">
           <button
             onClick={onConfirm}
-            className="rounded-2xl border px-4 py-2 text-sm font-semibold text-gray-900 transition-colors hover:bg-gray-200"
+            className="rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border px-4 py-2 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-1.5 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-gray-900 transition-colors hover:bg-gray-200"
           >
             {confirmText}
           </button>
           <button
             onClick={onCancel}
-            className="rounded-2xl border px-4 py-2 text-sm font-semibold text-gray-900 transition-colors hover:bg-gray-200"
+            className="rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border px-4 py-2 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-1.5 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-gray-900 transition-colors hover:bg-gray-200"
           >
             {cancelText}
           </button>
@@ -1703,18 +1702,26 @@ useEffect(() => {
         const topScaled = roundToHundredth(prev.stacks.top * mult);
         const bottomScaled = roundToHundredth(prev.stacks.bottom * mult);
 
+        // Cap blinds at available stack if short
+        const actualTopBlind = Math.min(topBlind, topScaled);
+        const actualBottomBlind = Math.min(bottomBlind, bottomScaled);
+        
         const nextGame = {
           pot: 0,
           bets: {
-            top: roundToHundredth(topBlind),
-            bottom: roundToHundredth(bottomBlind),
+            top: roundToHundredth(actualTopBlind),
+            bottom: roundToHundredth(actualBottomBlind),
           },
           stacks: {
-            top: roundToHundredth(Math.max(0, topScaled - topBlind)),
-            bottom: roundToHundredth(Math.max(0, bottomScaled - bottomBlind)),
+            top: roundToHundredth(Math.max(0, topScaled - actualTopBlind)),
+            bottom: roundToHundredth(Math.max(0, bottomScaled - actualBottomBlind)),
           },
         };
 
+        // Determine actual SB/BB amounts based on dealer position
+        const actualSB = dealerSeat === "top" ? actualTopBlind : actualBottomBlind;
+        const actualBB = dealerSeat === "top" ? actualBottomBlind : actualTopBlind;
+        
         if (isHost && !suppressMpRef.current) {
   const blindItems = [
     {
@@ -1722,14 +1729,14 @@ useEffect(() => {
       sequence: actionSequenceRef.current++,
       street: "Preflop" as StreetName,
       seat: dealerSeat,
-      text: `Posts SB ${formatBB(SB)}bb`
+      text: `Posts SB ${formatBB(actualSB)}bb`
     },
     {
       id: uid(),
       sequence: actionSequenceRef.current++,
       street: "Preflop" as StreetName,
       seat: nonDealerSeat,
-      text: `Posts BB ${formatBB(BB)}bb`
+      text: `Posts BB ${formatBB(actualBB)}bb`
     }
   ];
 
@@ -2709,6 +2716,7 @@ useEffect(() => {
 /* ---------- title screen ---------- */
 
 if (screen === "role") {
+
   const baseButton =
     "w-full rounded-3xl border px-6 font-semibold transition-colors duration-200 hover:bg-gray-50 hover:border-gray-300";
 
@@ -2759,13 +2767,13 @@ const joinGame = () => {
       <button
         type="button"
         onClick={() => setStudentMenuOpen((o) => !o)}
-        className="text-sm font-semibold text-white underline opacity-90 hover:opacity-100"
+        className="text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-white underline opacity-90 hover:opacity-100"
       >
         {studentProfile.firstName} {studentProfile.lastName}
       </button>
 
       {studentMenuOpen && (
-        <div className="absolute right-0 mt-2 w-40 rounded-xl border bg-white shadow-md">
+        <div className="absolute right-0 mt-2 w-40 min-[1536px]:max-[1650px]:w-32 rounded-xl min-[1536px]:max-[1650px]:rounded-lg border bg-white shadow-md">
           <button
             type="button"
 
@@ -2790,7 +2798,7 @@ const joinGame = () => {
   setScreen("role");
 }}
 
-            className="w-full flex items-center px-4 py-2 text-left text-sm font-semibold text-black hover:bg-gray-100"
+            className="w-full flex items-center px-4 py-2 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-1.5 text-left text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black hover:bg-gray-100"
           >
             Log out
           </button>
@@ -2808,7 +2816,7 @@ const joinGame = () => {
           : "dashboard"
       )
     }
-    className="text-sm font-semibold text-white underline opacity-80 hover:opacity-100"
+    className="text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-white underline opacity-80 hover:opacity-100"
   >
     Dashboard
   </button>
@@ -2824,7 +2832,7 @@ const joinGame = () => {
           clearTimers();
           setScreen("studentLogin");
         }}
-        className="text-sm font-semibold text-white underline opacity-80 hover:opacity-100"
+        className="text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-white underline opacity-80 hover:opacity-100"
       >
         Log in
       </button>
@@ -2840,7 +2848,7 @@ const joinGame = () => {
           setSeatedRole(null);
           setScreen("studentProfile");
         }}
-        className="text-sm font-semibold text-white underline opacity-80 hover:opacity-100"
+        className="text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-white underline opacity-80 hover:opacity-100"
       >
         Sign up
       </button>
@@ -2850,23 +2858,23 @@ const joinGame = () => {
 
 </div>
 
-      <div className="w-full max-w-xl flex flex-col">
-        <h1 className="h-[44px] mb-8 text-center text-3xl font-bold leading-[44px]">
+      <div className="w-full max-w-xl min-[1536px]:max-[1650px]:max-w-[450px] flex flex-col">
+        <h1 className="h-[44px] min-[1536px]:max-[1650px]:h-[34px] mb-8 min-[1536px]:max-[1650px]:mb-6 text-center text-3xl min-[1536px]:max-[1650px]:text-2xl font-bold leading-[44px] min-[1536px]:max-[1650px]:leading-[34px]">
           HeadsUp
         </h1>
 
-      <div className="h-[220px] flex flex-col justify-start">
+      <div className="h-[220px] min-[1536px]:max-[1650px]:h-[180px] flex flex-col justify-start">
 
     {/* CREATE GAME PIN VIEW */}
 {gamePin && !joinMode && (
   <div className="flex flex-col items-center gap-6">
-    <div className="text-lg font-semibold tabular-nums">
+    <div className="text-lg min-[1536px]:max-[1650px]:text-sm font-semibold tabular-nums">
       Game PIN: <span className="font-bold">{gamePin}</span>
     </div>
 
     <button
       onClick={clearPin}
-      className={`${baseButton} py-4 text-base max-w-sm`}
+      className={`${baseButton} py-4 min-[1536px]:max-[1650px]:py-3 text-base min-[1536px]:max-[1650px]:text-xs max-w-sm min-[1536px]:max-[1650px]:max-w-[280px]`}
     >
       Back
     </button>
@@ -2890,13 +2898,13 @@ const joinGame = () => {
           }
         }}
         placeholder="Enter Game PIN"
-        className="w-full max-w-xs rounded-xl border px-4 py-3 text-center text-lg tracking-widest tabular-nums"
+        className="w-full max-w-xs min-[1536px]:max-[1650px]:max-w-[224px] rounded-xl min-[1536px]:max-[1650px]:rounded-lg border px-4 py-3 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-2 text-center text-lg min-[1536px]:max-[1650px]:text-sm tracking-widest tabular-nums"
       />
 
       <button
   onClick={joinPinGame}
   disabled={joinPinInput.length !== 4}
-  className={`${baseButton} py-4 text-base max-w-sm ${
+  className={`${baseButton} py-4 min-[1536px]:max-[1650px]:py-3 text-base min-[1536px]:max-[1650px]:text-xs max-w-sm min-[1536px]:max-[1650px]:max-w-[280px] ${
     joinPinInput.length !== 4 ? "opacity-50 pointer-events-none" : ""
   }`}
 >
@@ -2905,7 +2913,7 @@ const joinGame = () => {
 
 <button
   onClick={clearPin}
-  className={`${baseButton} py-4 text-base max-w-sm`}
+  className={`${baseButton} py-4 min-[1536px]:max-[1650px]:py-3 text-base min-[1536px]:max-[1650px]:text-xs max-w-sm min-[1536px]:max-[1650px]:max-w-[280px]`}
 >
   Back
 </button>
@@ -2922,7 +2930,9 @@ const joinGame = () => {
   className={`
     ${baseButton}
     py-10
+    min-[1536px]:max-[1650px]:py-7
     text-xl
+    min-[1536px]:max-[1650px]:text-base
     ${creatingGame
       ? "opacity-60 cursor-not-allowed pointer-events-none"
       : ""}
@@ -2937,7 +2947,9 @@ const joinGame = () => {
   className={`
     ${baseButton}
     py-10
+    min-[1536px]:max-[1650px]:py-7
     text-xl
+    min-[1536px]:max-[1650px]:text-base
     ${creatingGame ? "opacity-60 cursor-not-allowed pointer-events-none" : ""}
   `}
 >
@@ -2956,7 +2968,7 @@ const joinGame = () => {
 
 if (screen === "studentProfile") {
   return (
-    <main className="relative flex min-h-screen items-center justify-center bg-black px-6">
+    <main className="relative flex min-h-screen items-center justify-center bg-black px-6 min-[1536px]:max-[1650px]:scale-[0.85] min-[1536px]:max-[1650px]:origin-center">
       <div className="w-full max-w-md">
         <h1 className="mb-6 text-center text-3xl font-bold">Sign up</h1>
 
@@ -3098,7 +3110,7 @@ if (screen === "studentProfile") {
 
 if (screen === "studentLogin") {
   return (
-    <main className="relative flex min-h-screen items-center justify-center bg-black px-6">
+    <main className="relative flex min-h-screen items-center justify-center bg-black px-6 min-[1536px]:max-[1650px]:scale-[0.85] min-[1536px]:max-[1650px]:origin-center">
       <div className="w-full max-w-md">
         <h1 className="mb-6 text-center text-3xl font-bold">Log in</h1>
 
@@ -3141,7 +3153,7 @@ if (screen === "dashboard" && seatedRole === "student") {
     "w-full rounded-3xl border px-6 font-semibold transition-colors duration-200 hover:bg-gray-50 hover:border-gray-300";
 
   return (
-    <main className="flex min-h-screen justify-center bg-black px-6 pt-16">
+   <main className="flex min-h-screen justify-center bg-black px-6 pt-16 min-[1536px]:max-[1650px]:scale-[0.85] min-[1536px]:max-[1650px]:origin-center">
   <div className="w-full max-w-[96rem]">
        <div className="mb-2 flex items-center justify-center gap-4">
   <h1 className="text-3xl font-bold">Student dashboard</h1>
@@ -3261,7 +3273,7 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
     "w-full rounded-3xl border px-6 font-semibold transition-colors duration-200 hover:bg-gray-50 hover:border-gray-300";
 
   return (
-   <main className="flex min-h-screen justify-center bg-black px-6 pt-16">
+   <main className="flex min-h-screen justify-center bg-black px-6 pt-16 min-[1536px]:max-[1650px]:scale-[0.85] min-[1536px]:max-[1650px]:origin-center">
   <div className="w-full max-w-[96rem]">
        <div className="mb-2 flex items-center justify-center gap-4">
   <h1 className="text-3xl font-bold">Professional Dashboard</h1>
@@ -3376,10 +3388,10 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
 
   if (screen !== "game" || !seatedRole) return null;
 
-  const dealerChipTop =
-    "absolute -bottom-3 -right-3 flex h-10 w-10 items-center justify-center rounded-full border bg-white text-[20px] font-bold text-black shadow-sm";
+ const dealerChipTop =
+    "absolute -bottom-3 -right-3 min-[1536px]:max-[1650px]:-bottom-2 min-[1536px]:max-[1650px]:-right-3 flex h-10 w-10 min-[1536px]:max-[1650px]:h-8 min-[1536px]:max-[1650px]:w-8 items-center justify-center rounded-full border bg-white text-[20px] min-[1536px]:max-[1650px]:text-[16px] font-bold text-black shadow-sm";
   const dealerChipBottom =
-    "absolute -top-3 -left-3 flex h-10 w-10 items-center justify-center rounded-full border bg-white text-[20px] font-bold text-black shadow-sm";
+    "absolute -top-3 -left-3 min-[1536px]:max-[1650px]:-top-2 min-[1536px]:max-[1650px]:-left-3 flex h-10 w-10 min-[1536px]:max-[1650px]:h-8 min-[1536px]:max-[1650px]:w-8 items-center justify-center rounded-full border bg-white text-[20px] min-[1536px]:max-[1650px]:text-[16px] font-bold text-black shadow-sm";
 
   const streetLabel = streetNameFromCount(street);
 
@@ -3522,13 +3534,12 @@ const displayedHistoryBoard = viewingSnapshot
   }}
 />
 
-      <main className="relative flex items-center justify-center bg-black px-6 py-1 overflow-hidden" style={{ height: '100vh' }}>
-
+      <main className="relative flex items-center justify-center bg-black px-6 py-1 overflow-y-auto" style={{ minHeight: '100vh' }}>
       {((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver)) && !playAgainRequested && (
   <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50">
     <button
       onClick={() => setPlayAgainRequested(true)}
-      className="rounded-2xl border border-black bg-white px-6 py-2 text-sm font-semibold text-black shadow-sm hover:bg-gray-50"
+      className="rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border border-black bg-white px-6 py-2 min-[1536px]:max-[1650px]:px-4 min-[1536px]:max-[1650px]:py-1.5 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm hover:bg-gray-50"
     >
       Play Again?
     </button>
@@ -3536,7 +3547,7 @@ const displayedHistoryBoard = viewingSnapshot
 )}
 
 {((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver)) && playAgainRequested && (
-  <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 rounded-2xl border border-black bg-white px-6 py-2 text-sm font-semibold text-black shadow-sm">
+  <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border border-black bg-white px-6 py-2 min-[1536px]:max-[1650px]:px-4 min-[1536px]:max-[1650px]:py-1.5 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm">
     Invited &quot;Opponent&quot; to play again, waiting for &quot;Opponent&apos;s&quot; response...
   </div>
 )}
@@ -3567,7 +3578,7 @@ const displayedHistoryBoard = viewingSnapshot
           }
         }
       }}
-      className="rounded-2xl border border-black bg-white px-6 py-2 text-sm font-semibold text-black shadow-sm hover:bg-gray-50"
+      className="rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border border-black bg-white px-6 py-2 min-[1536px]:max-[1650px]:px-4 min-[1536px]:max-[1650px]:py-1.5 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm hover:bg-gray-50"
     >
       Show Hand
     </button>
@@ -3577,15 +3588,15 @@ const displayedHistoryBoard = viewingSnapshot
       {blindNotice && 
        displayHandResult.status === "playing" && 
        !((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver)) ? (
-  <div className="absolute top-6 left-1/2 -translate-x-1/2 text-sm font-semibold text-white">
+  <div className="absolute top-6 left-1/2 -translate-x-1/2 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-white">
     {blindNotice}
   </div>
 ) : null}
         <div className="w-full max-w-6xl">
-          <div className="mb-3 md:mb-6 flex items-center justify-between">
+          <div className="mb-3 md:mb-6 min-[1536px]:max-[1650px]:mb-2 flex items-center justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-white">HeadsUp</h1>
-              <div className="text-sm text-white opacity-80 tabular-nums">
+              <h1 className="text-2xl min-[1536px]:max-[1650px]:text-xl font-bold text-white">HeadsUp</h1>
+              <div className="text-sm min-[1536px]:max-[1650px]:text-xs text-white opacity-80 tabular-nums">
                 Pot: {formatBB(roundToHundredth(displayGame.pot + displayGame.bets.top + displayGame.bets.bottom))}{" "}
                 BB <span className="opacity-60">·</span> {streetLabel}{" "}
                 <span className="opacity-60">·</span>{" "}
@@ -3604,11 +3615,11 @@ const displayedHistoryBoard = viewingSnapshot
 </span>
               </div>
               {handResult.message ? (
-                <div className="mt-1 text-sm text-white opacity-90">{handResult.message}</div>
+                <div className="mt-1 text-sm min-[1536px]:max-[1650px]:text-xs text-white opacity-90">{handResult.message}</div>
               ) : null}
             </div>
 
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-4 min-[1536px]:max-[1650px]:gap-3">
 
   {studentProfile.email && !gamePin && (
   <button
@@ -3616,7 +3627,7 @@ type="button"
 onClick={() =>
 setScreen(seatedRole === "professional" ? "professionalDashboard" : "dashboard")
 }
-className="text-sm text-white underline opacity-80 hover:opacity-100"
+className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacity-80 hover:opacity-100"
 >
     Dashboard
 </button>
@@ -3650,13 +3661,13 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
         setShowTitleScreenConfirm(true);
       }
     }}
-    className="text-sm text-white underline opacity-80 hover:opacity-100"
+    className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacity-80 hover:opacity-100"
   >
     Title screen
   </button>
 
 {opponentQuit && (
-<div className="text-sm text-white opacity-90">
+<div className="text-sm min-[1536px]:max-[1650px]:text-xs text-white opacity-90">
       Opponent Quit, Go To Title Screen
 </div>
   )}
@@ -3667,14 +3678,14 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
           {/* ACTION LOG pinned left + TABLE centered */}
           <div className="relative mt-6 w-full">
             {/* LEFT: ACTION LOG */}
-<div className="absolute -left-28 md:-left-36 top-0 w-[420px] md:w-[500px] rounded-3xl border border-white/10 bg-black/20 p-3 md:p-4 text-white text-left">
+<div className="absolute -left-28 md:-left-36 min-[1536px]:max-[1650px]:!-left-[102px] top-0 w-[420px] md:w-[500px] min-[1536px]:max-[1650px]:w-[390px] rounded-3xl min-[1536px]:max-[1650px]:rounded-2xl border border-white/10 bg-black/20 p-3 md:p-4 min-[1536px]:max-[1650px]:p-2 text-white text-left">
  {/* Header row (matches your target screenshot) */}
-<div className="mb-6 relative flex w-full items-center gap-4">
+<div className="mb-6 min-[1536px]:max-[1650px]:mb-4 relative flex w-full items-center gap-4 min-[1536px]:max-[1650px]:gap-3">
   {/* arrows */}
   <div className="flex items-center gap-2 shrink-0">
     <button
       type="button"
-      className="rounded border border-white/20 bg-white/10 px-2 py-0.5 text-xs hover:bg-white/20"
+      className="rounded border border-white/20 bg-white/10 px-2 py-0.5 min-[1536px]:max-[1650px]:px-1.5 min-[1536px]:max-[1650px]:py-0 text-xs min-[1536px]:max-[1650px]:text-[10px] hover:bg-white/20"
       onClick={() => setLogViewOffset((o) => Math.min(o + 1, handLogHistory.length))}
     >
       ◀
@@ -3682,7 +3693,7 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
 
     <button
       type="button"
-      className="rounded border border-white/20 bg-white/10 px-2 py-0.5 text-xs hover:bg-white/20"
+      className="rounded border border-white/20 bg-white/10 px-2 py-0.5 min-[1536px]:max-[1650px]:px-1.5 min-[1536px]:max-[1650px]:py-0 text-xs min-[1536px]:max-[1650px]:text-[10px] hover:bg-white/20"
       onClick={() => setLogViewOffset((o) => Math.max(o - 1, 0))}
     >
       ▶
@@ -3690,10 +3701,10 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
   </div>
 
   {/* Action + stacks: glued right after arrows */}
-  <div className="flex items-baseline gap-3 min-w-0">
-    <div className="text-sm font-semibold text-white whitespace-nowrap">Action</div>
+  <div className="flex items-baseline gap-3 min-[1536px]:max-[1650px]:gap-2 min-w-0">
+    <div className="text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-white whitespace-nowrap">Action</div>
 
-    <div className="text-xs font-normal text-white/70 tabular-nums whitespace-nowrap">
+    <div className="text-xs min-[1536px]:max-[1650px]:text-[10px] font-normal text-white/70 tabular-nums whitespace-nowrap">
       {viewingSnapshot
         ? `You (${viewingSnapshot.heroPos}) ${formatBB(viewingSnapshot.heroStartStack)}bb · Opponent (${viewingSnapshot.oppPos}) ${formatBB(viewingSnapshot.oppStartStack)}bb`
         : `You (${heroPosLabel}) ${formatBB(heroStartStack)}bb · Opponent (${oppPosLabel}) ${formatBB(oppStartStack)}bb`}
@@ -3701,7 +3712,7 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
   </div>
 
   {/* Current hand pinned right */}
-  <div className="absolute right-4 top-1/2 -translate-y-1/2 text-xs text-white/70 tabular-nums whitespace-nowrap">
+  <div className="absolute right-4 min-[1536px]:max-[1650px]:right-2 top-1/2 -translate-y-1/2 text-xs min-[1536px]:max-[1650px]:text-[10px] text-white/70 tabular-nums whitespace-nowrap">
   {logViewOffset === 0
     ? `Hand #${(multiplayerActive && mpState ? mpState.handId : handId) + 1}`
     : `Hand #${(handLogHistory[logViewOffset - 1]?.handNo ?? 0) + 1}`}
@@ -3710,9 +3721,9 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
 
   {/* Card summary - shown for both current hand (if ended) and history */}
 {(viewingSnapshot || displayHandResult.status === "ended") ? (
-  <div className="mb-3 flex flex-col gap-2">
-    <div className="flex items-start gap-4">
-      <div className="flex flex-col gap-1 text-xs text-white/70 whitespace-nowrap">
+  <div className="mb-3 min-[1536px]:max-[1650px]:mb-2 flex flex-col gap-2 min-[1536px]:max-[1650px]:gap-1">
+    <div className="flex items-start gap-4 min-[1536px]:max-[1650px]:gap-2">
+      <div className="flex flex-col gap-1 text-xs min-[1536px]:max-[1650px]:text-[10px] text-white/70 whitespace-nowrap">
         <div>
           You:{" "}
           {viewingSnapshot ? (
@@ -3797,30 +3808,30 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
 
 {/* Log list */}
 {displayedActionLog.length === 0 ? (
-  <div className="text-sm opacity-70">—</div>
+  <div className="text-sm min-[1536px]:max-[1650px]:text-xs opacity-70">—</div>
 ) : (
-  <div className="max-h-[calc(100vh-220px)] w-full overflow-auto pr-1">
-    <div className="w-full text-sm">
+  <div className="max-h-[calc(100vh-220px)] min-[1536px]:max-[1650px]:max-h-[calc(100vh-180px)] w-full overflow-auto pr-1">
+    <div className="w-full text-sm min-[1536px]:max-[1650px]:text-xs">
       {displayedActionLog.slice(-30).map((a) => (
         <div
           key={a.id}
           className="grid w-full grid-cols-[1fr_1fr_1fr] items-center py-2 leading-none"
         >
           <div
-            className="text-center text-xs uppercase tracking-wide text-white/60 -translate-x-4.5 leading-none"
+            className="text-center text-xs min-[1536px]:max-[1650px]:text-[10px] uppercase tracking-wide text-white/60 -translate-x-4.5 leading-none"
             style={{ paddingTop: "3px" }}
           >
             {a.street}
           </div>
 
           <div
-            className="text-center font-semibold text-white leading-none"
+            className="text-center font-semibold text-white leading-none min-[1536px]:max-[1650px]:text-xs"
             style={{ marginLeft: "-56px" }}
           >
             {a.seat === myActualSeat ? `You (${heroPosLabel})` : `Opponent (${oppPosLabel})`}
           </div>
 
-          <div className="text-center text-white/90 tabular-nums break-words leading-none">
+          <div className="text-center text-white/90 tabular-nums break-words leading-none min-[1536px]:max-[1650px]:text-xs">
             {renderActionText(a.text)}
           </div>
         </div>
@@ -3832,23 +3843,23 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
 </div>
 
             {/* CENTER: TABLE */}
-            <div className="mx-auto flex w-fit flex-col items-center gap-[60px] xl:gap-[50px] 2xl:gap-[60px] scale-[0.65] md:scale-[0.75] lg:scale-[0.85] xl:scale-100 origin-center">
+            <div className="mx-auto flex w-fit flex-col items-center gap-[60px] min-[1536px]:max-[1650px]:gap-[0px] min-[1651px]:gap-[60px] scale-[0.65] md:scale-[0.75] lg:scale-[0.85] xl:scale-100 origin-center">
               {/* TOP SEAT (Opponent) */}
-              <div className="relative h-[260px] w-[216px] xl:h-[230px] xl:w-[192px] 2xl:h-[260px] 2xl:w-[216px] translate-y-6 rounded-3xl border border-white/20 bg-black/50 text-center">
+              <div className="relative h-[260px] w-[216px] min-[1536px]:max-[1650px]:h-[200px] min-[1536px]:max-[1650px]:w-[170px] -translate-y-6 min-[1536px]:max-[1650px]:-translate-y-15 rounded-3xl border border-white/20 bg-black/50 text-center">
                 {!amIDealer && <div className={dealerChipTop}>D</div>}
 
-                <div className="absolute -bottom-14 left-1/2 -translate-x-1/2">
+                <div className="absolute -bottom-14 min-[1536px]:max-[1650px]:-bottom-10 left-1/2 -translate-x-1/2">
                   <BetChip amount={oppBet} label={oppLabel} />
                 </div>
 
                 <div className="flex h-full flex-col justify-center">
-                  <div className="-mt-3 text-sm uppercase text-white opacity-60">Opponent</div>
-                  <div className="mt-2 text-sm text-white">
+                  <div className="-mt-3 min-[1536px]:max-[1650px]:-mt-2 text-sm min-[1536px]:max-[1650px]:text-xs uppercase text-white opacity-60">Opponent</div>
+                  <div className="mt-2 min-[1536px]:max-[1650px]:mt-1 text-sm min-[1536px]:max-[1650px]:text-xs text-white">
                     Stack:{" "}
                     <span className="font-semibold tabular-nums">{formatBB(oppStack)}bb</span>
                   </div>
 
-                  <div className="mt-4 flex justify-center gap-3">
+                  <div className="mt-4 min-[1536px]:max-[1650px]:mt-2 flex justify-center gap-3 min-[1536px]:max-[1650px]:gap-2">
                     {oppA && oppB ? (
                       // When viewing history, use snapshot's oppShown; otherwise use live state
                       (viewingSnapshot 
@@ -3881,8 +3892,8 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
               </div>
 
               {/* BOARD (always current hand) */}
-<div className="flex h-40 items-center justify-center">
-  <div className="flex gap-3">
+<div className="relative flex h-40 items-center justify-center">
+  <div className="absolute flex gap-3 min-[1536px]:max-[1650px]:gap-2 top-[8px] min-[1536px]:max-[1650px]:top-[7px]">
     {board.slice(0, displayStreet).map((c, i) => (
       <CardTile key={i} card={c} />
     ))}
@@ -3890,25 +3901,25 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
 </div>
 
               {/* BOTTOM SEAT (You) */}
-              <div className="relative h-[260px] w-[216px] xl:h-[230px] xl:w-[192px] 2xl:h-[260px] 2xl:w-[216px] -translate-y-6 rounded-3xl border border-white/20 bg-black/50 text-center">
+              <div className="relative h-[260px] w-[216px] min-[1536px]:max-[1650px]:h-[200px] min-[1536px]:max-[1650px]:w-[170px] -translate-y-6 min-[1536px]:max-[1650px]:-translate-y-3 rounded-3xl border border-white/20 bg-black/50 text-center">
                 {amIDealer && <div className={dealerChipBottom}>D</div>}
 
-                <div className="absolute -top-14 left-1/2 -translate-x-1/2">
+                <div className="absolute -top-14 min-[1536px]:max-[1650px]:-top-10 left-1/2 -translate-x-1/2">
                   <BetChip amount={myBet} label={myLabel} />
                 </div>
 
                 <div className="flex h-full flex-col justify-center">
-                  <div className="text-sm uppercase text-white opacity-60">You</div>
-                  <div className="text-xl font-semibold capitalize text-white">{seatedRole}</div>
+                  <div className="text-sm min-[1536px]:max-[1650px]:text-xs uppercase text-white opacity-60">You</div>
+                  <div className="text-xl min-[1536px]:max-[1650px]:text-base font-semibold capitalize text-white">{seatedRole}</div>
 
-                  <div className="mt-2 text-sm text-white">
+                  <div className="mt-2 min-[1536px]:max-[1650px]:mt-1 text-sm min-[1536px]:max-[1650px]:text-xs text-white">
                     Stack:{" "}
                     <span className="font-semibold tabular-nums">
                       {formatBB(myStack)}bb
                     </span>
                   </div>
 
-                  <div className="mt-4 flex flex-col items-center gap-2">
+                  <div className="mt-4 min-[1536px]:max-[1650px]:mt-2 flex flex-col items-center gap-2 min-[1536px]:max-[1650px]:gap-1">
                  <div className="flex justify-center gap-3">
                    {youC && youD ? (
                     // When viewing history, use snapshot's heroShown; otherwise use live state
@@ -3943,15 +3954,15 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
 
           {/* ACTION PANEL (bottom-right) */}
           {displayToAct === mySeat && displayHandResult.status === "playing" && (
-            <div className="fixed bottom-4 md:bottom-6 right-4 md:right-6 z-50 flex w-[280px] md:w-[320px] flex-col gap-2 md:gap-3">
-              {displayGame.stacks[myActualSeat] > bottomCallAmt && displayGame.stacks[oppActualSeat] > 0 && (
-                <div className="rounded-2xl border bg-white p-3 text-black shadow-sm">
-                  <div className="mb-2 flex items-center justify-between">
-                    <div className="text-sm font-semibold">{facingBetBottom ? "Raise to" : "Bet to"}</div>
-                    <div className="text-sm font-bold tabular-nums">{formatBB(displayBetSize)} BB</div>
+            <div className="fixed bottom-4 md:bottom-6 right-4 md:right-6 z-50 flex w-[280px] md:w-[320px] min-[1536px]:max-[1650px]:w-[258px] flex-col gap-2 md:gap-3">
+              {displayGame.stacks[myActualSeat] > bottomCallAmt && displayGame.stacks[oppActualSeat] > 0 && bottomMaxTo > bottomMinRaise && (
+                <div className="rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border bg-white p-3 min-[1536px]:max-[1650px]:p-1.5 min-[1536px]:max-[1650px]:py-2.5 text-black shadow-sm min-[1536px]:max-[1650px]:ml-auto min-[1536px]:max-[1650px]:w-[258px]">
+                  <div className="mb-2 min-[1536px]:max-[1650px]:mb-1 flex items-center justify-between">
+                    <div className="text-sm min-[1536px]:max-[1650px]:text-xs min-[1536px]:max-[1650px]:ml-1 font-semibold">{facingBetBottom ? "Raise to" : "Bet to"}</div>
+                    <div className="text-sm min-[1536px]:max-[1650px]:text-xs min-[1536px]:max-[1650px]:mr-1 font-bold tabular-nums">{formatBB(displayBetSize)} BB</div>
                   </div>
 
-                  <div className="flex items-center gap-3 min-w-0">
+                  <div className="flex items-center gap-3 min-w-0 min-[1536px]:max-[1650px]:justify-end">
                     <input
                       type="range"
                       min={bottomMinRaise}
@@ -3959,7 +3970,7 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
                       step={0.01}
                       value={betSize === "" ? bottomMinRaise : Math.max(betSize, bottomMinRaise)}
                       onChange={(e) => setBetSizeRounded(Number(e.target.value))}
-                      className="w-full"
+                      className="w-full min-[1536px]:max-[1650px]:w-[160px]"
                     />
 
                     <input
@@ -3990,13 +4001,13 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
                           setBetSizeRounded(Math.min(betSize, bottomMaxTo));
                         }
                       }}
-                      className="w-24 rounded-xl border px-2 py-1 text-sm tabular-nums"
+                      className="w-24 min-[1536px]:max-[1650px]:w-19 rounded-xl min-[1536px]:max-[1650px]:rounded-lg border px-2 py-1 min-[1536px]:max-[1650px]:px-1.5 min-[1536px]:max-[1650px]:py-0.5 text-sm min-[1536px]:max-[1650px]:text-xs tabular-nums min-[1536px]:max-[1650px]:mr-2"
                     />
                   </div>
                 </div>
               )}
 
-              <div className="flex justify-end gap-3">
+              <div className="flex justify-end gap-3 w-full">
                 <button
   type="button"
   onClick={() => {
@@ -4013,7 +4024,7 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
     }
   }}
   disabled={!(displayToAct === mySeat && displayHandResult.status === "playing")}
-  className="h-[64px] w-[100px] rounded-2xl border bg-white px-4 py-3 text-sm font-semibold text-black shadow-sm hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+  className="h-[64px] w-[100px] min-[1536px]:max-[1650px]:h-[50px] min-[1536px]:max-[1650px]:w-[78px] rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border bg-white px-4 py-3 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-2 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
 >
   Fold
 </button>
@@ -4024,12 +4035,12 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
   dispatchAction(facingBetBottom ? { type: "CALL" } : { type: "CHECK" })
 }
   disabled={!(displayToAct === mySeat && displayHandResult.status === "playing")}
-  className="flex h-[64px] w-[100px] flex-col items-center justify-center rounded-2xl border bg-white px-4 py-3 text-sm font-semibold text-black shadow-sm hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+  className="flex h-[64px] w-[100px] min-[1536px]:max-[1650px]:h-[50px] min-[1536px]:max-[1650px]:w-[78px] flex-col items-center justify-center rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border bg-white px-4 py-3 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-2 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
 >
   <div>{facingBetBottom ? "Call" : "Check"}</div>
 
   {facingBetBottom && (
-    <div className="mt-0.5 text-xs font-bold tabular-nums">
+    <div className="mt-0.5 text-xs min-[1536px]:max-[1650px]:text-[10px] font-bold tabular-nums">
       {formatBB(bottomCallAmt)} BB
     </div>
   )}
@@ -4043,13 +4054,13 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
     dispatchAction({ type: "BET_RAISE_TO", to: finalSize });
   }}
   disabled={!(displayToAct === mySeat && displayHandResult.status === "playing")}
-  className="flex h-[64px] w-[100px] flex-col items-center justify-center rounded-2xl border bg-white px-4 py-3 text-sm font-semibold text-black shadow-sm hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+  className="flex h-[64px] w-[100px] min-[1536px]:max-[1650px]:h-[50px] min-[1536px]:max-[1650px]:w-[78px] flex-col items-center justify-center rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border bg-white px-4 py-3 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-2 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
 >
-  <div className="text-sm leading-tight">
+  <div className="text-sm min-[1536px]:max-[1650px]:text-xs leading-tight">
     {facingBetBottom ? "Raise" : "Bet"}
   </div>
 
-  <div className="mt-0.5 w-full text-center text-xs font-bold tabular-nums">
+  <div className="mt-0.5 w-full text-center text-xs min-[1536px]:max-[1650px]:text-[10px] font-bold tabular-nums">
     {formatBB(displayBetSize)} BB
   </div>
 </button>

@@ -419,18 +419,21 @@ public startHand() {
     const dealerSeat = this.state.dealerOffset === 0 ? "top" : "bottom";
     const nonDealerSeat = dealerSeat === "top" ? "bottom" : "top";
     
-    // Post blinds
-    this.state.game.bets[dealerSeat] = this.SB;
-    this.state.game.bets[nonDealerSeat] = this.BB;
-    this.state.game.stacks[dealerSeat] -= this.SB;
-    this.state.game.stacks[nonDealerSeat] -= this.BB;
+    // Post blinds - cap at available stack if short
+    const actualSB = Math.min(this.SB, this.state.game.stacks[dealerSeat]);
+    const actualBB = Math.min(this.BB, this.state.game.stacks[nonDealerSeat]);
+    
+    this.state.game.bets[dealerSeat] = roundToHundredth(actualSB);
+    this.state.game.bets[nonDealerSeat] = roundToHundredth(actualBB);
+    this.state.game.stacks[dealerSeat] = roundToHundredth(this.state.game.stacks[dealerSeat] - actualSB);
+    this.state.game.stacks[nonDealerSeat] = roundToHundredth(this.state.game.stacks[nonDealerSeat] - actualBB);
     
     // Dealer acts first preflop
     this.state.toAct = dealerSeat;
     
     // Log blinds
-    this.logAction(dealerSeat, `Posts SB ${this.SB}bb`);
-    this.logAction(nonDealerSeat, `Posts BB ${this.BB}bb`);
+    this.logAction(dealerSeat, `Posts SB ${actualSB}bb`);
+    this.logAction(nonDealerSeat, `Posts BB ${actualBB}bb`);
     
     this.state.blindsPosted = true;
   }
