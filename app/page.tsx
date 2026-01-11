@@ -3832,9 +3832,9 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
 </div>
 
             {/* CENTER: TABLE */}
-            <div className="mx-auto flex w-fit flex-col items-center gap-[60px] scale-[0.65] md:scale-[0.75] lg:scale-[0.85] xl:scale-[0.82] 2xl:scale-100 origin-center">
+            <div className="mx-auto flex w-fit flex-col items-center gap-[60px] xl:gap-[50px] 2xl:gap-[60px] scale-[0.65] md:scale-[0.75] lg:scale-[0.85] xl:scale-100 origin-center">
               {/* TOP SEAT (Opponent) */}
-              <div className="relative h-[260px] w-[216px] translate-y-6 rounded-3xl border border-white/20 bg-black/50 text-center">
+              <div className="relative h-[260px] w-[216px] xl:h-[230px] xl:w-[192px] 2xl:h-[260px] 2xl:w-[216px] translate-y-6 rounded-3xl border border-white/20 bg-black/50 text-center">
                 {!amIDealer && <div className={dealerChipTop}>D</div>}
 
                 <div className="absolute -bottom-14 left-1/2 -translate-x-1/2">
@@ -3890,7 +3890,7 @@ className="text-sm text-white underline opacity-80 hover:opacity-100"
 </div>
 
               {/* BOTTOM SEAT (You) */}
-              <div className="relative h-[260px] w-[216px] -translate-y-6 rounded-3xl border border-white/20 bg-black/50 text-center">
+              <div className="relative h-[260px] w-[216px] xl:h-[230px] xl:w-[192px] 2xl:h-[260px] 2xl:w-[216px] -translate-y-6 rounded-3xl border border-white/20 bg-black/50 text-center">
                 {amIDealer && <div className={dealerChipBottom}>D</div>}
 
                 <div className="absolute -top-14 left-1/2 -translate-x-1/2">
