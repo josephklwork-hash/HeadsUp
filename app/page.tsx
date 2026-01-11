@@ -3569,7 +3569,7 @@ const displayedHistoryBoard = viewingSnapshot
   }}
 />
 
-      <main className="relative flex items-center justify-center bg-black px-6 py-1 overflow-y-auto" style={{ minHeight: '100vh', transform: `scale(${gameScale})`, transformOrigin: 'center center' }}>
+      <main className="relative flex items-center justify-center bg-black px-6 py-1 overflow-y-auto" style={{ minHeight: '100vh' }}>
       {((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver)) && !playAgainRequested && (
   <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50">
     <button
@@ -3627,7 +3627,7 @@ const displayedHistoryBoard = viewingSnapshot
     {blindNotice}
   </div>
 ) : null}
-        <div className="w-full max-w-6xl">
+        <div className="w-full max-w-6xl" style={{ transform: `scale(${gameScale})`, transformOrigin: 'center center' }}>
           <div className="mb-3 md:mb-6 min-[1536px]:max-[1650px]:mb-2 flex items-center justify-between">
             <div>
               <h1 className="text-2xl min-[1536px]:max-[1650px]:text-xl font-bold text-white">HeadsUp</h1>
