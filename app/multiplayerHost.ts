@@ -700,8 +700,11 @@ if (this.onStateChange) {
     const firstToShow: Seat = riverCheckedThrough ? nonDealerSeat : (this.state.lastAggressor || nonDealerSeat);
     const secondToShow: Seat = firstToShow === "top" ? "bottom" : "top";
     
-    // Second player only shows if they win or tie (can muck if they lose)
-    const secondShows = winner === "tie" || winner === secondToShow;
+    // Check if someone is all-in - if so, both must show
+    const someoneAllIn = this.state.game.stacks.top <= 0 || this.state.game.stacks.bottom <= 0;
+    
+    // Second player only shows if they win or tie (can muck if they lose) - unless all-in
+    const secondShows = someoneAllIn || winner === "tie" || winner === secondToShow;
     
     const topShows = firstToShow === "top" || (secondToShow === "top" && secondShows);
     const bottomShows = firstToShow === "bottom" || (secondToShow === "bottom" && secondShows);
