@@ -217,7 +217,7 @@ function evaluate7(cards: Card[]) {
 }
 
 export class MultiplayerHost {
-  private channel: RealtimeChannel;
+  public channel: RealtimeChannel;
   private userId: string;
   
   // Game state
@@ -876,6 +876,23 @@ if (this.onStateChange) {
    */
   public getState(): HostState | null {
     return this.state;
+  }
+  
+  /**
+   * Reset the game for a fresh start (Play Again)
+   */
+  public resetGame() {
+    // Randomize new dealer
+    const newDealerOffset: 0 | 1 = Math.random() < 0.5 ? 0 : 1;
+    
+    // Create fresh state
+    this.state = this.createInitialState(newDealerOffset);
+    this.state.gameSession = (this.state.gameSession || 0) + 1;
+    
+    // Start the first hand
+    this.startHand();
+    
+    console.log('Host reset game, new session:', this.state.gameSession);
   }
   
   /**

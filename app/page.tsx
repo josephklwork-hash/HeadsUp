@@ -21,6 +21,8 @@ type Screen =
   | "studentLogin"
   | "dashboard"
   | "professionalDashboard"
+  | "editProfile"
+  | "connections"
   | "game";
 
 type Seat = "top" | "bottom";
@@ -368,7 +370,7 @@ function handRankOnly(score: number[]) {
 }
 
 const connectButtonClass =
-  "rounded-xl border border-black bg-white px-3 py-1.5 text-sm font-semibold text-black transition-colors hover:bg-gray-50";
+  "rounded-xl border border-black bg-white px-3 py-1 text-sm font-semibold text-black transition-colors hover:bg-gray-50";
 
 /* ---------- UI components ---------- */
 
@@ -695,7 +697,9 @@ const setStreetBettor = (next: any) =>
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showFoldConfirm, setShowFoldConfirm] = useState(false);
   const [showTitleScreenConfirm, setShowTitleScreenConfirm] = useState(false);
+  const [showDashboardConfirm, setShowDashboardConfirm] = useState(false);
   const [opponentQuit, setOpponentQuit] = useState(false);
+  const [opponentName, setOpponentName] = useState<string | null>(null);
 
   const [handLogHistory, setHandLogHistory] = useState<HandLogSnapshot[]>([]);
   const [logViewOffset, setLogViewOffset] = useState(0);
@@ -716,6 +720,10 @@ const setStreetBettor = (next: any) =>
   // Store the multiplayer controllers
 const [mpHost, setMpHost] = useState<MultiplayerHost | null>(null);
 const [mpJoiner, setMpJoiner] = useState<MultiplayerJoiner | null>(null);
+
+// Refs for accessing controllers in callbacks (avoids stale closures)
+const mpHostRef = useRef<MultiplayerHost | null>(null);
+const mpJoinerRef = useRef<MultiplayerJoiner | null>(null);
 
 // Store the multiplayer state (received from host or from local host controller)
 const [mpState, setMpState] = useState<HostState | null>(null);
@@ -753,6 +761,7 @@ const [mpState, setMpState] = useState<HostState | null>(null);
   }
 
 const [playAgainRequested, setPlayAgainRequested] = useState(false);
+const [opponentWantsPlayAgain, setOpponentWantsPlayAgain] = useState(false);
 
 const [aiEnabled, setAiEnabled] = useState(false);
 
@@ -769,22 +778,114 @@ const [studentProfile, setStudentProfile] = useState({
   password: "",
   year: "",
   major: "",
+  school: "",
   company: "",
   workTitle: "",
+  linkedinUrl: "",
 });
 
 const [loginEmail, setLoginEmail] = useState("");
 const [loginPassword, setLoginPassword] = useState("");
+const [showPassword, setShowPassword] = useState(false);
+const [showLoginPassword, setShowLoginPassword] = useState(false);
 
 const [studentMenuOpen, setStudentMenuOpen] = useState(false);
 
-const [otherStudents, setOtherStudents] = useState<
-  { firstName: string; lastName: string; year: string; major: string }[]
->([]);
+const [otherStudents, setOtherStudents] = useState<{ id: string; firstName: string; lastName: string; year: string; major: string; linkedinUrl: string | null }[]>([]);
 
-const [otherProfessionals, setOtherProfessionals] = useState<
-  { firstName: string; lastName: string; company: string; workTitle: string }[]
->([]);
+const [otherProfessionals, setOtherProfessionals] = useState<{ id: string; firstName: string; lastName: string; company: string; workTitle: string; linkedinUrl: string | null }[]>([]);
+
+// Connection system state
+const [myConnections, setMyConnections] = useState<Set<string>>(new Set());
+const [pendingOutgoing, setPendingOutgoing] = useState<Set<string>>(new Set());
+const [pendingIncoming, setPendingIncoming] = useState<Map<string, string>>(new Map());
+
+// Messages state
+const [selectedChatUser, setSelectedChatUser] = useState<{
+  id: string;
+  firstName: string;
+  lastName: string;
+  linkedinUrl: string | null;
+} | null>(null);
+const [messages, setMessages] = useState<{
+  id: string;
+  senderId: string;
+  text: string;
+  createdAt: string;
+}[]>([]);
+const [messageInput, setMessageInput] = useState("");
+const [connectedUsers, setConnectedUsers] = useState<{
+  id: string;
+  firstName: string;
+  lastName: string;
+  linkedinUrl: string | null;
+}[]>([]);
+const [unreadCounts, setUnreadCounts] = useState<Map<string, number>>(new Map());
+const [lastMessages, setLastMessages] = useState<Map<string, { text: string; createdAt: string; senderId: string }>>(new Map());
+
+async function sendConnectionRequest(recipientId: string, recipientName: string) {
+  if (!sbUser?.id) return;
+  
+  const { error } = await supabase
+    .from('connections')
+    .insert({
+      requester_id: sbUser.id,
+      recipient_id: recipientId,
+      status: 'pending',
+    });
+  
+  if (error) {
+    if (error.code === '23505') {
+      alert('Connection request already sent!');
+    } else {
+      alert('Failed to send request: ' + error.message);
+    }
+    return;
+  }
+  
+  setPendingOutgoing(prev => new Set(prev).add(recipientId));
+  alert(`Connection request sent to ${recipientName}!`);
+}
+
+async function acceptConnection(odId: string, connectionId: string, odName: string) {
+  const { error } = await supabase
+    .from('connections')
+    .update({ status: 'accepted' })
+    .eq('id', connectionId);
+  
+  if (error) {
+    alert('Failed to accept: ' + error.message);
+    return;
+  }
+  
+  setMyConnections(prev => new Set(prev).add(odId));
+  setPendingIncoming(prev => {
+    const next = new Map(prev);
+    next.delete(odId);
+    return next;
+  });
+  alert(`You are now connected with ${odName}!`);
+}
+
+async function rejectConnection(odId: string, connectionId: string) {
+  const { error } = await supabase
+    .from('connections')
+    .update({ status: 'rejected' })
+    .eq('id', connectionId);
+  
+  if (error) {
+    alert('Failed to reject: ' + error.message);
+    return;
+  }
+  
+  setPendingIncoming(prev => {
+    const next = new Map(prev);
+    next.delete(odId);
+    return next;
+  });
+}
+
+const [savingProfile, setSavingProfile] = useState(false);
 
   // timers
   const opponentTimerRef = useRef<number | null>(null);
@@ -857,8 +958,73 @@ useEffect(() => {
     if (status === 'SUBSCRIBED') {
       console.log('Successfully subscribed to game channel');
       
-      // Initialize the appropriate controller
+      // Track if we've sent our info (to avoid infinite loop)
+      let sentMyInfo = false;
+      
+      // Listen for opponent's profile info and play again events
+      ch.on("broadcast", { event: "mp" }, ({ payload }: any) => {
+        if (!payload) return;
+        if (payload.sender === (sbUser?.id ?? (isHost ? 'host' : 'joiner'))) return;
+        
+        if (payload.event === "PLAYER_INFO") {
+          console.log("Received PLAYER_INFO:", payload.name);
+          setOpponentName(payload.name || null);
+          
+          // Reply with our own info if we haven't yet (ensures both sides get names)
+          if (!sentMyInfo) {
+            sentMyInfo = true;
+            ch.send({
+              type: "broadcast",
+              event: "mp",
+              payload: {
+                event: "PLAYER_INFO",
+                name: studentProfile.firstName || null,
+                sender: sbUser?.id ?? (isHost ? 'host' : 'joiner'),
+              },
+            });
+          }
+        }
+        
+        // Handle play again request from opponent
+        if (payload.event === "PLAY_AGAIN_REQUEST") {
+          console.log("Received PLAY_AGAIN_REQUEST from opponent");
+          setOpponentWantsPlayAgain(true);
+        }
+        
+        // Handle play again accept - opponent accepted our request
+        if (payload.event === "PLAY_AGAIN_ACCEPT") {
+          console.log("Received PLAY_AGAIN_ACCEPT from opponent");
+          setPlayAgainRequested(false);
+          setOpponentWantsPlayAgain(false);
+          setHandLogHistory([]);
+          setLogViewOffset(0);
+          
+          // Host resets the game when receiving accept from joiner
+          if (isHost && mpHostRef.current) {
+            mpHostRef.current.resetGame();
+            setMpState(JSON.parse(JSON.stringify(mpHostRef.current.getState())));
+          }
+          // Joiner will receive new state automatically via the normal state sync
+        }
+      });
+      
       if (isHost) {
+        // Send host's profile info to joiner (with delay to ensure joiner is listening)
+        setTimeout(() => {
+          if (!sentMyInfo) {
+            sentMyInfo = true;
+            ch.send({
+              type: "broadcast",
+              event: "mp",
+              payload: {
+                event: "PLAYER_INFO",
+                name: studentProfile.firstName || null,
+                sender: sbUser?.id ?? 'host',
+              },
+            });
+          }
+        }, 800);
+        
         // HOST: Create host controller
         const host = new MultiplayerHost(
           ch, 
@@ -878,6 +1044,7 @@ useEffect(() => {
           savedHostState // Pass saved state if reconnecting
         );
         setMpHost(host);
+        mpHostRef.current = host;
         
         // Only start a new hand if we don't have saved state
         if (!savedHostState) {
@@ -906,19 +1073,38 @@ useEffect(() => {
           }
         );
         setMpJoiner(joiner);
+        mpJoinerRef.current = joiner;
+        
+        // Send joiner's profile info to host (with delay to ensure host is listening)
+        setTimeout(() => {
+          if (!sentMyInfo) {
+            sentMyInfo = true;
+            ch.send({
+              type: "broadcast",
+              event: "mp",
+              payload: {
+                event: "PLAYER_INFO",
+                name: studentProfile.firstName || null,
+                sender: sbUser?.id ?? 'joiner',
+              },
+            });
+          }
+        }, 800);
       }
     }
   });
 
   return () => {
     // Cleanup
-    if (mpHost) {
-      mpHost.destroy();
+    if (mpHostRef.current) {
+      mpHostRef.current.destroy();
       setMpHost(null);
+      mpHostRef.current = null;
     }
-    if (mpJoiner) {
-      mpJoiner.destroy();
+    if (mpJoinerRef.current) {
+      mpJoinerRef.current.destroy();
       setMpJoiner(null);
+      mpJoinerRef.current = null;
     }
     supabase.removeChannel(ch);
   };
@@ -927,10 +1113,39 @@ useEffect(() => {
 useEffect(() => {
   let mounted = true;
 
-  supabase.auth.getUser().then(({ data }) => {
+  async function initAuth() {
+    const { data } = await supabase.auth.getUser();
     if (!mounted) return;
+    
     setSbUser(data.user ?? null);
-  });
+    
+    // If user is logged in, fetch their profile
+    if (data.user) {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', data.user.id)
+        .single();
+      
+      if (profile && mounted) {
+        setStudentProfile({
+          firstName: profile.first_name,
+          lastName: profile.last_name,
+          email: profile.email,
+          password: '',
+          year: profile.year || '',
+          major: profile.major || '',
+          school: profile.school || '',
+          company: profile.company || '',
+          workTitle: profile.work_title || '',
+          linkedinUrl: profile.linkedin_url || '',
+        });
+        setSeatedRole(profile.role as Role);
+      }
+    }
+  }
+  
+  initAuth();
 
   const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
     setSbUser(session?.user ?? null);
@@ -941,6 +1156,85 @@ useEffect(() => {
     sub.subscription.unsubscribe();
   };
 }, []);
+
+// Fetch other users for dashboard
+useEffect(() => {
+  if (!sbUser?.id) return;
+  if (screen !== 'dashboard' && screen !== 'professionalDashboard') return;
+  
+  async function fetchProfiles() {
+    const { data: students } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('role', 'student')
+      .neq('id', sbUser.id)
+      .order('created_at', { ascending: false })
+      .limit(50);
+    
+    const { data: professionals } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('role', 'professional')
+      .neq('id', sbUser.id)
+      .order('created_at', { ascending: false })
+      .limit(50);
+    
+    if (students) {
+      setOtherStudents(students.map(p => ({
+        id: p.id,
+        firstName: p.first_name,
+        lastName: p.last_name,
+        year: p.year || '',
+        major: p.major || '',
+        linkedinUrl: p.linkedin_url || null,
+      })));
+    }
+    
+    if (professionals) {
+      setOtherProfessionals(professionals.map(p => ({
+        id: p.id,
+        firstName: p.first_name,
+        lastName: p.last_name,
+        company: p.company || '',
+        workTitle: p.work_title || '',
+        linkedinUrl: p.linkedin_url || null,
+      })));
+    }
+    
+    // Fetch connections
+    const { data: connectionsData } = await supabase
+      .from('connections')
+      .select('*')
+      .or(`requester_id.eq.${sbUser.id},recipient_id.eq.${sbUser.id}`);
+    
+    if (connectionsData) {
+      const connected = new Set<string>();
+      const outgoing = new Set<string>();
+      const incoming = new Map<string, string>();
+      
+      for (const conn of connectionsData) {
+        const isRequester = conn.requester_id === sbUser.id;
+        const odId = isRequester ? conn.recipient_id : conn.requester_id;
+        
+        if (conn.status === 'accepted') {
+          connected.add(odId);
+        } else if (conn.status === 'pending') {
+          if (isRequester) {
+            outgoing.add(odId);
+          } else {
+            incoming.set(odId, conn.id);
+          }
+        }
+      }
+      
+      setMyConnections(connected);
+      setPendingOutgoing(outgoing);
+      setPendingIncoming(incoming);
+    }
+  }
+  
+  fetchProfiles();
+}, [sbUser?.id, screen]);
 
 // Check for active game session on mount (reconnection logic)
 useEffect(() => {
@@ -1371,6 +1665,7 @@ function applyRemoteReset(p: {
   gameOverRef.current = false;
   setGameOver(false);
   setPlayAgainRequested(false);
+  setOpponentWantsPlayAgain(false);
 
   setDealerOffset(p.dealerOffset);
 
@@ -2837,6 +3132,268 @@ useEffect(() => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [displayToAct, mySeat, displayStreet, displayGame.bets.top, displayGame.bets.bottom]);
 
+/* ---------- connections / messages hooks ---------- */
+
+// Fetch connected users and unread counts
+useEffect(() => {
+  if (!sbUser?.id) return;
+  if (screen !== 'connections' && screen !== 'dashboard' && screen !== 'professionalDashboard') return;
+  
+  // Clear selected chat user when not on connections screen
+  if (screen !== 'connections') {
+    setSelectedChatUser(null);
+  }
+  
+  async function fetchConnectedUsers() {
+    const { data: connectionsData } = await supabase
+      .from('connections')
+      .select('*')
+      .or(`requester_id.eq.${sbUser.id},recipient_id.eq.${sbUser.id}`)
+      .eq('status', 'accepted');
+    
+    if (!connectionsData || connectionsData.length === 0) {
+      setConnectedUsers([]);
+      return;
+    }
+    
+    const otherUserIds = connectionsData.map(conn => 
+      conn.requester_id === sbUser.id ? conn.recipient_id : conn.requester_id
+    );
+    
+    const { data: profiles } = await supabase
+      .from('profiles')
+      .select('id, first_name, last_name, linkedin_url')
+      .in('id', otherUserIds);
+    
+    if (profiles) {
+      setConnectedUsers(profiles.map(p => ({
+        id: p.id,
+        firstName: p.first_name,
+        lastName: p.last_name,
+        linkedinUrl: p.linkedin_url,
+      })));
+    }
+    
+    // Fetch last message and unread count for each connection
+    const lastMsgs = new Map<string, { text: string; createdAt: string; senderId: string }>();
+    const unreadMap = new Map<string, number>();
+    
+    for (const odId of otherUserIds) {
+      // Get last message in conversation
+      const { data: lastMsg } = await supabase
+        .from('messages')
+        .select('*')
+        .or(`and(sender_id.eq.${sbUser.id},recipient_id.eq.${odId}),and(sender_id.eq.${odId},recipient_id.eq.${sbUser.id})`)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+      
+      if (lastMsg) {
+        lastMsgs.set(odId, {
+          text: lastMsg.text,
+          createdAt: lastMsg.created_at,
+          senderId: lastMsg.sender_id,
+        });
+      }
+      
+      // Count unread messages (messages from them that we haven't "read")
+      // For now, we'll consider messages unread if they're from the other person
+      // and the conversation isn't currently selected
+      const { count } = await supabase
+        .from('messages')
+        .select('*', { count: 'exact', head: true })
+        .eq('sender_id', odId)
+        .eq('recipient_id', sbUser.id)
+        .eq('read', false);
+      
+      if (count && count > 0) {
+        unreadMap.set(odId, count);
+      }
+    }
+    
+    setLastMessages(lastMsgs);
+    setUnreadCounts(unreadMap);
+  }
+  
+  fetchConnectedUsers();
+}, [sbUser?.id, screen]);
+
+// Real-time subscription for new messages (updates badge in real-time)
+useEffect(() => {
+  if (!sbUser?.id) return;
+  if (screen !== 'connections' && screen !== 'dashboard' && screen !== 'professionalDashboard') return;
+  
+  const channel = supabase
+    .channel(`new-messages-${sbUser.id}-${screen}`)
+    .on('postgres_changes', {
+      event: 'INSERT',
+      schema: 'public',
+      table: 'messages',
+      filter: `recipient_id=eq.${sbUser.id}`,
+    }, (payload) => {
+      const m = payload.new as any;
+      
+      // Only increment unread if this conversation isn't currently open
+      if (selectedChatUser?.id !== m.sender_id) {
+        setUnreadCounts(prev => {
+          const next = new Map(prev);
+          const current = next.get(m.sender_id) || 0;
+          next.set(m.sender_id, current + 1);
+          return next;
+        });
+        
+        // Update last message
+        setLastMessages(prev => {
+          const next = new Map(prev);
+          next.set(m.sender_id, {
+            text: m.text,
+            createdAt: m.created_at,
+            senderId: m.sender_id,
+          });
+          return next;
+        });
+      }
+    })
+    .subscribe();
+  
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}, [sbUser?.id, screen, selectedChatUser?.id]);
+
+// Fetch messages when a chat is selected
+useEffect(() => {
+  if (!sbUser?.id || !selectedChatUser) return;
+  if (screen !== 'connections') return;
+  
+  async function fetchMessages() {
+    const { data } = await supabase
+      .from('messages')
+      .select('*')
+      .or(`and(sender_id.eq.${sbUser.id},recipient_id.eq.${selectedChatUser.id}),and(sender_id.eq.${selectedChatUser.id},recipient_id.eq.${sbUser.id})`)
+      .order('created_at', { ascending: true });
+    
+    if (data) {
+      setMessages(data.map(m => ({
+        id: m.id,
+        senderId: m.sender_id,
+        text: m.text,
+        createdAt: m.created_at,
+      })));
+    }
+    
+    // Mark messages as read when opening conversation
+    const { data: updateData, error: updateError } = await supabase
+      .from('messages')
+      .update({ read: true })
+      .eq('sender_id', selectedChatUser.id)
+      .eq('recipient_id', sbUser.id)
+      .select();
+    
+    console.log('Mark as read result:', { updateData, updateError });
+    
+    if (updateError) {
+      console.error('Failed to mark messages as read:', updateError);
+    }
+    
+    // Clear unread count for this user immediately in UI
+    setUnreadCounts(prev => {
+      const next = new Map(prev);
+      next.delete(selectedChatUser.id);
+      return next;
+    });
+  }
+  
+  fetchMessages();
+  
+  // Scroll to bottom after messages load
+  setTimeout(() => {
+    const messagesContainer = document.querySelector('[data-messages-container]');
+    if (messagesContainer) {
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+  }, 200);
+  
+  // Subscribe to new messages
+  const channel = supabase
+    .channel(`messages-${sbUser.id}-${selectedChatUser.id}`)
+    .on('postgres_changes', {
+      event: 'INSERT',
+      schema: 'public',
+      table: 'messages',
+    }, (payload) => {
+      const m = payload.new as any;
+      if ((m.sender_id === sbUser.id && m.recipient_id === selectedChatUser.id) ||
+          (m.sender_id === selectedChatUser.id && m.recipient_id === sbUser.id)) {
+        setMessages(prev => {
+          if (prev.some(msg => msg.id === m.id)) return prev;
+          return [...prev, {
+            id: m.id,
+            senderId: m.sender_id,
+            text: m.text,
+            createdAt: m.created_at,
+          }];
+        });
+        
+        // Update last message for this conversation
+        setLastMessages(prev => {
+          const next = new Map(prev);
+          next.set(selectedChatUser.id, {
+            text: m.text,
+            createdAt: m.created_at,
+            senderId: m.sender_id,
+          });
+          return next;
+        });
+        
+        // Mark as read immediately since chat is open
+        if (m.sender_id === selectedChatUser.id) {
+          supabase
+            .from('messages')
+            .update({ read: true })
+            .eq('id', m.id);
+        }
+      }
+    })
+    .subscribe();
+  
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}, [sbUser?.id, selectedChatUser?.id, screen]);
+
+async function sendMessage() {
+  if (!sbUser?.id || !selectedChatUser || !messageInput.trim()) return;
+  
+  const { error } = await supabase
+    .from('messages')
+    .insert({
+      sender_id: sbUser.id,
+      recipient_id: selectedChatUser.id,
+      text: messageInput.trim(),
+      read: false,
+    });
+  
+  if (error) {
+    alert('Failed to send message: ' + error.message);
+    return;
+  }
+  
+  setMessageInput("");
+}
+
+// Scroll to bottom when you send a message
+useEffect(() => {
+  if (messages.length === 0) return;
+  const lastMsg = messages[messages.length - 1];
+  if (lastMsg.senderId === sbUser?.id) {
+    const messagesContainer = document.querySelector('[data-messages-container]');
+    if (messagesContainer) {
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+  }
+}, [messages, sbUser?.id]);
+
 /* ---------- loading screen while reconnecting ---------- */
 
 if (isReconnecting) {
@@ -2898,7 +3455,7 @@ const joinGame = () => {
     titleBusy ? "opacity-30 pointer-events-none" : ""
   }`}
 >
-  {studentProfile.firstName && studentProfile.lastName && !gamePin ? (
+ {studentProfile.firstName && studentProfile.lastName && !gamePin ? (
   <>
     <div className="relative">
       <button
@@ -2913,28 +3470,36 @@ const joinGame = () => {
         <div className="absolute right-0 mt-2 w-40 min-[1536px]:max-[1650px]:w-32 rounded-xl min-[1536px]:max-[1650px]:rounded-lg border bg-white shadow-md">
           <button
             type="button"
-
             onClick={() => {
-  setStudentMenuOpen(false);
-  resetGame();
-
-  setOtherStudents([]);
-  setOtherProfessionals([]);
-
-  setStudentProfile({
-    firstName: "",
-    lastName: "",
-    email: "",
-    password: "",
-    year: "",
-    major: "",
-    company: "",
-    workTitle: "",
-  });
-  setSeatedRole(null);
-  setScreen("role");
-}}
-
+              setStudentMenuOpen(false);
+              setScreen("editProfile");
+            }}
+            className="w-full flex items-center px-4 py-2 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-1.5 text-left text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black hover:bg-gray-100"
+          >
+            Edit Profile
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setStudentMenuOpen(false);
+              resetGame();
+              setOtherStudents([]);
+              setOtherProfessionals([]);
+              setStudentProfile({
+                firstName: "",
+                lastName: "",
+                email: "",
+                password: "",
+                year: "",
+                major: "",
+                school: "",
+                company: "",
+                workTitle: "",
+                linkedinUrl: "",
+              });
+              setSeatedRole(null);
+              setScreen("role");
+            }}
             className="w-full flex items-center px-4 py-2 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-1.5 text-left text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black hover:bg-gray-100"
           >
             Log out
@@ -3162,18 +3727,47 @@ if (screen === "studentProfile") {
   className="rounded-xl border px-4 py-3 text-sm"
 />
 
-<input
-  type="password"
-  placeholder="Password"
-  value={studentProfile.password}
-  onChange={(e) =>
-    setStudentProfile({ ...studentProfile, password: e.target.value })
-  }
-  className="rounded-xl border px-4 py-3 text-sm"
-/>
+<div className="relative">
+  <input
+    type={showPassword ? "text" : "password"}
+    placeholder="Password"
+    value={studentProfile.password}
+    onChange={(e) =>
+      setStudentProfile({ ...studentProfile, password: e.target.value })
+    }
+    className="w-full rounded-xl border px-4 py-3 text-sm pr-12"
+  />
+  <button
+    type="button"
+    onClick={() => setShowPassword(!showPassword)}
+    className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-gray-500 hover:text-gray-700"
+  >
+    {showPassword ? "Hide" : "Show"}
+  </button>
+</div>
 
 {seatedRole === "student" && (
   <>
+    <input
+      type="text"
+      placeholder="School"
+      value={studentProfile.school}
+      onChange={(e) =>
+        setStudentProfile({ ...studentProfile, school: e.target.value })
+      }
+      className="rounded-xl border px-4 py-3 text-sm"
+    />
+
+    <input
+      type="text"
+      placeholder="LinkedIn URL (optional)"
+      value={studentProfile.linkedinUrl}
+      onChange={(e) =>
+        setStudentProfile({ ...studentProfile, linkedinUrl: e.target.value })
+      }
+      className="rounded-xl border px-4 py-3 text-sm"
+    />
+
     <input
       type="text"
       placeholder="Year"
@@ -3217,22 +3811,81 @@ if (screen === "studentProfile") {
       }
       className="rounded-xl border px-4 py-3 text-sm"
     />
+
+    <input
+      type="text"
+      placeholder="School"
+      value={studentProfile.school || ""}
+      onChange={(e) =>
+        setStudentProfile({ ...studentProfile, school: e.target.value })
+      }
+      className="rounded-xl border px-4 py-3 text-sm"
+    />
+
+    <input
+      type="text"
+      placeholder="LinkedIn URL (optional)"
+      value={studentProfile.linkedinUrl}
+      onChange={(e) =>
+        setStudentProfile({ ...studentProfile, linkedinUrl: e.target.value })
+      }
+      className="rounded-xl border px-4 py-3 text-sm"
+    />
   </>
 )}
 
           <button
   type="button"
-  disabled={!seatedRole}
-  onClick={() => {
-    if (seatedRole === "student") {
-      setOtherStudents((prev) => [studentProfile, ...prev]);
-    } else {
-      setOtherProfessionals((prev) => [studentProfile, ...prev]);
+  disabled={!seatedRole || !studentProfile.email || !studentProfile.password || !studentProfile.firstName || !studentProfile.lastName}
+  onClick={async () => {
+    try {
+      // Create auth user
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email: studentProfile.email,
+        password: studentProfile.password,
+      });
+      
+      if (authError) {
+        alert('Sign up failed: ' + authError.message);
+        return;
+      }
+      
+      if (!authData.user) {
+        alert('Sign up failed: No user returned');
+        return;
+      }
+      
+      // Create profile
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .insert({
+          id: authData.user.id,
+          email: studentProfile.email,
+          first_name: studentProfile.firstName,
+          last_name: studentProfile.lastName,
+          role: seatedRole,
+          year: seatedRole === 'student' ? studentProfile.year : null,
+          major: seatedRole === 'student' ? studentProfile.major : null,
+          school: studentProfile.school || null,
+          company: seatedRole === 'professional' ? studentProfile.company : null,
+          work_title: seatedRole === 'professional' ? studentProfile.workTitle : null,
+          linkedin_url: studentProfile.linkedinUrl || null,
+        });
+      
+      if (profileError) {
+        alert('Profile creation failed: ' + profileError.message);
+        return;
+      }
+      
+      alert('Account created! Please check your email to verify.');
+      setScreen("role");
+    } catch (e) {
+      console.error('Sign up error:', e);
+      alert('Sign up failed. Please try again.');
     }
-    setScreen("role");
   }}
   className={`mt-4 rounded-2xl border px-4 py-3 text-sm font-semibold transition-colors ${
-    seatedRole ? "hover:bg-gray-50" : "opacity-50 cursor-not-allowed"
+    seatedRole && studentProfile.email && studentProfile.password && studentProfile.firstName && studentProfile.lastName ? "hover:bg-gray-50" : "opacity-50 cursor-not-allowed"
   }`}
 >
   Continue
@@ -3260,20 +3913,78 @@ if (screen === "studentLogin") {
             className="rounded-xl border px-4 py-3 text-sm"
           />
 
-          <input
-            type="password"
-            placeholder="Password"
-            value={loginPassword}
-            onChange={(e) => setLoginPassword(e.target.value)}
-            className="rounded-xl border px-4 py-3 text-sm"
-          />
+          <div className="relative">
+            <input
+              type={showLoginPassword ? "text" : "password"}
+              placeholder="Password"
+              value={loginPassword}
+              onChange={(e) => setLoginPassword(e.target.value)}
+              className="w-full rounded-xl border px-4 py-3 text-sm pr-12"
+            />
+            <button
+              type="button"
+              onClick={() => setShowLoginPassword(!showLoginPassword)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-gray-500 hover:text-gray-700"
+            >
+              {showLoginPassword ? "Hide" : "Show"}
+            </button>
+          </div>
 
           <button
             type="button"
-            onClick={() => {
-              setScreen("role");
+            disabled={!loginEmail || !loginPassword}
+            onClick={async () => {
+              try {
+                const { data, error } = await supabase.auth.signInWithPassword({
+                  email: loginEmail,
+                  password: loginPassword,
+                });
+                
+                if (error) {
+                  alert('Login failed: ' + error.message);
+                  return;
+                }
+                
+                if (!data.user) {
+                  alert('Login failed: No user returned');
+                  return;
+                }
+                
+                // Fetch profile to get role and details
+                const { data: profile, error: profileError } = await supabase
+                  .from('profiles')
+                  .select('*')
+                  .eq('id', data.user.id)
+                  .single();
+                
+                if (profileError || !profile) {
+                  alert('Could not load profile');
+                  return;
+                }
+                
+                // Update local state with profile info
+                setStudentProfile({
+                  firstName: profile.first_name,
+                  lastName: profile.last_name,
+                  email: profile.email,
+                  password: '',
+                  year: profile.year || '',
+                  major: profile.major || '',
+                  school: profile.school || '',
+                  company: profile.company || '',
+                  workTitle: profile.work_title || '',
+                  linkedinUrl: profile.linkedin_url || '',
+                });
+                setSeatedRole(profile.role as Role);
+                setLoginEmail('');
+                setLoginPassword('');
+                setScreen("role");
+              } catch (e) {
+                console.error('Login error:', e);
+                alert('Login failed. Please try again.');
+              }
             }}
-            className="mt-4 rounded-2xl border px-4 py-3 text-sm font-semibold hover:bg-gray-50"
+            className="mt-4 rounded-2xl border px-4 py-3 text-sm font-semibold hover:bg-gray-50 disabled:opacity-50"
           >
             Continue
           </button>
@@ -3296,18 +4007,108 @@ if (screen === "dashboard" && seatedRole === "student") {
   <h1 className="text-3xl font-bold">Student dashboard</h1>
 
   <button
-  type="button"
-  onClick={() => {
-  if (!multiplayerActive) {
-    resetGame();
-  }
-  setScreen("game");
-}}
-  className="rounded-xl border px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50"
->
-  Join table
-</button>
+    type="button"
+    onClick={() => setScreen("editProfile")}
+    className="rounded-xl border px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50"
+  >
+    Edit Profile
+  </button>
 
+  {/* Game PIN display */}
+  {gamePin && !joinMode && (
+    <div className="flex items-center gap-2">
+      <span className="text-sm font-semibold">PIN: {gamePin}</span>
+      <button
+        type="button"
+        onClick={() => {
+          clearPin();
+          setGamePin(null);
+        }}
+        className="rounded-xl border px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50"
+      >
+        Cancel
+      </button>
+    </div>
+  )}
+
+  {/* Join game input */}
+  {joinMode && !gamePin && (
+    <div className="flex items-center gap-2">
+      <input
+        type="text"
+        inputMode="numeric"
+        maxLength={4}
+        value={joinPinInput}
+        onChange={(e) => setJoinPinInput(e.target.value.replace(/\D/g, ""))}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && joinPinInput.length === 4) {
+            joinPinGame();
+          }
+        }}
+        placeholder="Enter PIN"
+        className="w-24 rounded-lg border px-2 py-1 text-center text-sm tracking-widest"
+      />
+      <button
+        type="button"
+        onClick={() => joinPinGame()}
+        disabled={joinPinInput.length !== 4}
+        className="rounded-xl border px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 disabled:opacity-50"
+      >
+        Join
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setJoinMode(false);
+          setJoinPinInput("");
+        }}
+        className="rounded-xl border px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50"
+      >
+        Cancel
+      </button>
+    </div>
+  )}
+
+  {/* Create/Join buttons (shown when no PIN and not joining) */}
+  {!gamePin && !joinMode && (
+    <>
+      <button
+        type="button"
+        onClick={async () => {
+          setCreatingGame(true);
+          await createPinGame();
+          setCreatingGame(false);
+        }}
+        disabled={creatingGame}
+        className="rounded-xl border px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 disabled:opacity-50"
+      >
+        {creatingGame ? "Creating..." : "Create Game"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setJoinMode(true);
+          setJoinPinInput("");
+        }}
+        className="rounded-xl border px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50"
+      >
+        Join Game
+      </button>
+    </>
+  )}
+
+ <button
+    type="button"
+    onClick={() => setScreen("connections")}
+    className="relative rounded-xl border px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50"
+  >
+    Connections
+    {Array.from(unreadCounts.values()).reduce((a, b) => a + b, 0) > 0 && (
+      <span className="absolute -top-2 -right-2 flex h-5 w-5 items-center justify-center rounded-full bg-white border border-black text-[11px] font-bold text-black">
+        {Array.from(unreadCounts.values()).reduce((a, b) => a + b, 0) > 9 ? '9+' : Array.from(unreadCounts.values()).reduce((a, b) => a + b, 0)}
+      </span>
+    )}
+  </button>
   <button
     type="button"
     onClick={() => setScreen("role")}
@@ -3318,7 +4119,7 @@ if (screen === "dashboard" && seatedRole === "student") {
 </div>
 
         <p className="mb-8 text-center text-sm text-black/60">
-          Same aesthetic for now — we’ll plug in real widgets next.
+          Same aesthetic for now — we'll plug in real widgets next.
         </p>
 
         <div className="grid gap-4">
@@ -3343,19 +4144,74 @@ if (screen === "dashboard" && seatedRole === "student") {
   </button>
 
   <div className="max-h-[70vh] overflow-y-auto pr-4 flex flex-col gap-3">
+    {/* Your own profile card */}
+    <div className="w-full rounded-2xl border border-black bg-white px-5 py-4 font-semibold text-black flex items-center justify-between">
+      <span>
+        {studentProfile.linkedinUrl ? (
+          <a
+            href={studentProfile.linkedinUrl.startsWith('http') ? studentProfile.linkedinUrl : `https://${studentProfile.linkedinUrl}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 hover:underline"
+          >
+            {studentProfile.firstName} {studentProfile.lastName}
+          </a>
+        ) : (
+          <>{studentProfile.firstName} {studentProfile.lastName}</>
+        )}
+        {" • "}
+        {studentProfile.year} {" • "}
+        {studentProfile.major}
+      </span>
+    </div>
+
     {otherStudents.map((s, i) => (
   <div
     key={i}
     className="w-full rounded-2xl border border-black bg-white px-5 py-4 font-semibold text-black flex items-center justify-between"
   >
     <span>
-      {s.firstName} {" • "} {s.lastName} {" • "}
+      {s.linkedinUrl ? (
+        <a
+          href={s.linkedinUrl.startsWith('http') ? s.linkedinUrl : `https://${s.linkedinUrl}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-600 hover:underline"
+            >
+          {s.firstName} {s.lastName}
+        </a>
+      ) : (
+        <>{s.firstName} {s.lastName}</>
+      )}
+      {" • "}
       {s.year} {" • "}
       {s.major}
     </span>
 
-    {i > 0 && (
-      <button className={connectButtonClass}>
+    {myConnections.has(s.id) ? (
+      <span className="text-sm text-green-600 font-semibold">Connected</span>
+    ) : pendingOutgoing.has(s.id) ? (
+      <span className="text-sm text-gray-500">Pending</span>
+    ) : pendingIncoming.has(s.id) ? (
+      <div className="flex gap-2">
+        <button 
+          onClick={() => acceptConnection(s.id, pendingIncoming.get(s.id)!, `${s.firstName} ${s.lastName}`)}
+          className="rounded-xl border border-green-600 bg-green-50 px-3 py-1.5 text-sm font-semibold text-green-600 hover:bg-green-100"
+        >
+          Accept
+        </button>
+        <button 
+          onClick={() => rejectConnection(s.id, pendingIncoming.get(s.id)!)}
+          className="rounded-xl border border-red-600 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-600 hover:bg-red-100"
+        >
+          Reject
+        </button>
+      </div>
+    ) : (
+      <button 
+        className={connectButtonClass}
+        onClick={() => sendConnectionRequest(s.id, `${s.firstName} ${s.lastName}`)}
+      >
         Connect
       </button>
     )}
@@ -3377,17 +4233,53 @@ if (screen === "dashboard" && seatedRole === "student") {
     {otherProfessionals.map((p, i) => (
   <div
     key={i}
-    className="w-full rounded-2xl border border-black bg-white px-5 py-4 font-semibold text-black flex items-center justify-between"
+    className="w-full rounded-2xl border border-black bg-white px-5 py-[13px] font-semibold text-black flex items-center justify-between"
   >
     <span>
-      {p.firstName} {p.lastName} {" • "}
+      {p.linkedinUrl ? (
+        <a
+          href={p.linkedinUrl.startsWith('http') ? p.linkedinUrl : `https://${p.linkedinUrl}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-blue-600 hover:underline"
+        >
+          {p.firstName} {p.lastName}
+        </a>
+      ) : (
+        <>{p.firstName} {p.lastName}</>
+      )}
+      {" • "}
       {p.company} {" • "}
       {p.workTitle}
     </span>
 
-    <button className={connectButtonClass}>
-      Connect
-    </button>
+    {myConnections.has(p.id) ? (
+      <span className="text-sm text-green-600 font-semibold">Connected</span>
+    ) : pendingOutgoing.has(p.id) ? (
+      <span className="text-sm text-gray-500">Pending</span>
+    ) : pendingIncoming.has(p.id) ? (
+      <div className="flex gap-2">
+        <button 
+          onClick={() => acceptConnection(p.id, pendingIncoming.get(p.id)!, `${p.firstName} ${p.lastName}`)}
+          className="rounded-xl border border-green-600 bg-green-50 px-3 py-1.5 text-sm font-semibold text-green-600 hover:bg-green-100"
+        >
+          Accept
+        </button>
+        <button 
+          onClick={() => rejectConnection(p.id, pendingIncoming.get(p.id)!)}
+          className="rounded-xl border border-red-600 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-600 hover:bg-red-100"
+        >
+          Reject
+        </button>
+      </div>
+    ) : (
+      <button 
+        className={connectButtonClass}
+        onClick={() => sendConnectionRequest(p.id, `${p.firstName} ${p.lastName}`)}
+      >
+        Connect
+      </button>
+    )}
   </div>
 ))}
 
@@ -3416,18 +4308,108 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
   <h1 className="text-3xl font-bold">Professional Dashboard</h1>
 
   <button
-  type="button"
-  onClick={() => {
-  if (!multiplayerActive) {
-    resetGame();
-  }
-  setScreen("game");
-}}
-  className="rounded-xl border px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50"
->
-  Join table
-</button>
+    type="button"
+    onClick={() => setScreen("editProfile")}
+    className="rounded-xl border px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50"
+  >
+    Edit Profile
+  </button>
 
+  {/* Game PIN display */}
+  {gamePin && !joinMode && (
+    <div className="flex items-center gap-2">
+      <span className="text-sm font-semibold">PIN: {gamePin}</span>
+      <button
+        type="button"
+        onClick={() => {
+          clearPin();
+          setGamePin(null);
+        }}
+        className="rounded-xl border px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50"
+      >
+        Cancel
+      </button>
+    </div>
+  )}
+
+  {/* Join game input */}
+  {joinMode && !gamePin && (
+    <div className="flex items-center gap-2">
+      <input
+        type="text"
+        inputMode="numeric"
+        maxLength={4}
+        value={joinPinInput}
+        onChange={(e) => setJoinPinInput(e.target.value.replace(/\D/g, ""))}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && joinPinInput.length === 4) {
+            joinPinGame();
+          }
+        }}
+        placeholder="Enter PIN"
+        className="w-24 rounded-lg border px-2 py-1 text-center text-sm tracking-widest"
+      />
+      <button
+        type="button"
+        onClick={() => joinPinGame()}
+        disabled={joinPinInput.length !== 4}
+        className="rounded-xl border px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 disabled:opacity-50"
+      >
+        Join
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setJoinMode(false);
+          setJoinPinInput("");
+        }}
+        className="rounded-xl border px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50"
+      >
+        Cancel
+      </button>
+    </div>
+  )}
+
+  {/* Create/Join buttons (shown when no PIN and not joining) */}
+  {!gamePin && !joinMode && (
+    <>
+      <button
+        type="button"
+        onClick={async () => {
+          setCreatingGame(true);
+          await createPinGame();
+          setCreatingGame(false);
+        }}
+        disabled={creatingGame}
+        className="rounded-xl border px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 disabled:opacity-50"
+      >
+        {creatingGame ? "Creating..." : "Create Game"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setJoinMode(true);
+          setJoinPinInput("");
+        }}
+        className="rounded-xl border px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50"
+      >
+        Join Game
+      </button>
+    </>
+  )}
+
+  <button
+    type="button"
+    onClick={() => setScreen("connections")}
+    className="relative rounded-xl border px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50"
+  >
+    Connections
+    {Array.from(unreadCounts.values()).reduce((a, b) => a + b, 0) > 0 && (
+      <span className="absolute -top-2 -right-2 flex h-5 w-5 items-center justify-center rounded-full bg-white border border-black text-[11px] font-bold text-black">
+        {Array.from(unreadCounts.values()).reduce((a, b) => a + b, 0) > 9 ? '9+' : Array.from(unreadCounts.values()).reduce((a, b) => a + b, 0)}
+      </span>
+    )}
+  </button>
   <button
     type="button"
     onClick={() => setScreen("role")}
@@ -3462,19 +4444,74 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
   </button>
 
   <div className="max-h-[70vh] overflow-y-auto pr-2 flex flex-col gap-3">
+    {/* Your own profile card */}
+    <div className="w-full rounded-2xl border border-black bg-white px-5 py-4 font-semibold text-black flex items-center justify-between">
+      <span>
+        {studentProfile.linkedinUrl ? (
+          <a
+            href={studentProfile.linkedinUrl.startsWith('http') ? studentProfile.linkedinUrl : `https://${studentProfile.linkedinUrl}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 hover:underline"
+          >
+            {studentProfile.firstName} {studentProfile.lastName}
+          </a>
+        ) : (
+          <>{studentProfile.firstName} {studentProfile.lastName}</>
+        )}
+        {" • "}
+        {studentProfile.company} {" • "}
+        {studentProfile.workTitle}
+      </span>
+    </div>
+
     {otherProfessionals.map((p, i) => (
   <div
     key={i}
-    className="w-full rounded-2xl border border-black bg-white px-5 py-4 font-semibold text-black flex items-center justify-between"
+    className="w-full rounded-2xl border border-black bg-white px-5 py-[14px] font-semibold text-black flex items-center justify-between"
   >
     <span>
-      {p.firstName} {p.lastName} {" • "}
+      {p.linkedinUrl ? (
+        <a
+          href={p.linkedinUrl.startsWith('http') ? p.linkedinUrl : `https://${p.linkedinUrl}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-blue-600 hover:underline"
+        >
+          {p.firstName} {p.lastName}
+        </a>
+      ) : (
+        <>{p.firstName} {p.lastName}</>
+      )}
+      {" • "}
       {p.company} {" • "}
       {p.workTitle}
     </span>
 
-    {i > 0 && (
-      <button className={connectButtonClass}>
+    {myConnections.has(p.id) ? (
+      <span className="text-sm text-green-600 font-semibold">Connected</span>
+    ) : pendingOutgoing.has(p.id) ? (
+      <span className="text-sm text-gray-500">Pending</span>
+    ) : pendingIncoming.has(p.id) ? (
+      <div className="flex gap-2">
+        <button 
+          onClick={() => acceptConnection(p.id, pendingIncoming.get(p.id)!, `${p.firstName} ${p.lastName}`)}
+          className="rounded-xl border border-green-600 bg-green-50 px-3 py-1.5 text-sm font-semibold text-green-600 hover:bg-green-100"
+        >
+          Accept
+        </button>
+        <button 
+          onClick={() => rejectConnection(p.id, pendingIncoming.get(p.id)!)}
+          className="rounded-xl border border-red-600 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-600 hover:bg-red-100"
+        >
+          Reject
+        </button>
+      </div>
+    ) : (
+      <button 
+        className={connectButtonClass}
+        onClick={() => sendConnectionRequest(p.id, `${p.firstName} ${p.lastName}`)}
+      >
         Connect
       </button>
     )}
@@ -3496,17 +4533,53 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
     {otherStudents.map((s, i) => (
   <div
     key={i}
-    className="w-full rounded-2xl border border-black bg-white px-5 py-4 font-semibold text-black flex items-center justify-between"
+    className="w-full rounded-2xl border border-black bg-white px-5 py-[13px] font-semibold text-black flex items-center justify-between"
   >
     <span>
-      {s.firstName} {s.lastName} {" • "}
+      {s.linkedinUrl ? (
+        <a
+          href={s.linkedinUrl.startsWith('http') ? s.linkedinUrl : `https://${s.linkedinUrl}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-600 hover:underline"
+            >
+          {s.firstName} {s.lastName}
+        </a>
+      ) : (
+        <>{s.firstName} {s.lastName}</>
+      )}
+      {" • "}
       {s.year} {" • "}
       {s.major}
     </span>
 
-    <button className={connectButtonClass}>
-      Connect
-    </button>
+    {myConnections.has(s.id) ? (
+      <span className="text-sm text-green-600 font-semibold">Connected</span>
+    ) : pendingOutgoing.has(s.id) ? (
+      <span className="text-sm text-gray-500">Pending</span>
+    ) : pendingIncoming.has(s.id) ? (
+      <div className="flex gap-2">
+        <button 
+          onClick={() => acceptConnection(s.id, pendingIncoming.get(s.id)!, `${s.firstName} ${s.lastName}`)}
+          className="rounded-xl border border-green-600 bg-green-50 px-3 py-1.5 text-sm font-semibold text-green-600 hover:bg-green-100"
+        >
+          Accept
+        </button>
+        <button 
+          onClick={() => rejectConnection(s.id, pendingIncoming.get(s.id)!)}
+          className="rounded-xl border border-red-600 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-600 hover:bg-red-100"
+        >
+          Reject
+        </button>
+      </div>
+    ) : (
+      <button 
+        className={connectButtonClass}
+        onClick={() => sendConnectionRequest(s.id, `${s.firstName} ${s.lastName}`)}
+      >
+        Connect
+      </button>
+    )}
   </div>
 ))}
 
@@ -3515,6 +4588,362 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
   </div>
 </div>
 
+        </div>
+      </div>
+    </main>
+  );
+}
+
+if (screen === "connections") {
+  return (
+    <main className="flex h-screen justify-center bg-black px-6 py-6 overflow-hidden">
+      <div className="w-full max-w-[96rem] flex flex-col">
+        <div className="mb-4 flex items-center justify-center gap-4 shrink-0">
+          <h1 className="text-3xl font-bold">Connections</h1>
+          
+          <button
+            type="button"
+            onClick={() => setScreen(seatedRole === "professional" ? "professionalDashboard" : "dashboard")}
+            className="rounded-xl border px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50"
+          >
+            Dashboard
+          </button>
+          <button
+            type="button"
+            onClick={() => setScreen("role")}
+            className="rounded-xl border px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50"
+          >
+            Title screen
+          </button>
+        </div>
+        
+        <p className="mb-8 text-center text-sm text-black/60">
+          Message your connections
+        </p>
+        
+        <div className="rounded-3xl border bg-white p-6 w-full flex-1 min-h-0 overflow-hidden">
+          <div className="grid grid-cols-[350px_1fr] gap-6 h-full">
+            
+            {/* Left side - Connections list */}
+            <div className="flex flex-col border-r pr-6">
+              <div className="text-xs font-semibold uppercase tracking-wide text-black/50 mb-4">
+                Your Connections ({connectedUsers.length})
+              </div>
+              
+              <div className="flex-1 overflow-y-auto space-y-2">
+                {connectedUsers.length === 0 ? (
+                  <div className="text-sm text-black/50 text-center py-8">
+                    No connections yet. Connect with people from the Dashboard!
+                  </div>
+                ) : (
+                  connectedUsers.map((user) => {
+                    const lastMsg = lastMessages.get(user.id);
+                    const unreadCount = unreadCounts.get(user.id) || 0;
+                    
+                    // Format date like LinkedIn
+                    const formatDate = (dateStr: string) => {
+                      const date = new Date(dateStr);
+                      const now = new Date();
+                      const diffMs = now.getTime() - date.getTime();
+                      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+                      
+                      if (diffDays === 0) {
+                        return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+                      } else if (diffDays === 1) {
+                        return 'Yesterday';
+                      } else if (diffDays < 7) {
+                        return date.toLocaleDateString([], { weekday: 'short' });
+                      } else {
+                        return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+                      }
+                    };
+                    
+                    return (
+                      <button
+                        key={user.id}
+                        onClick={() => setSelectedChatUser(user)}
+                        className={`w-full rounded-xl border px-4 py-3 text-left transition-colors hover:bg-gray-50 ${
+                          selectedChatUser?.id === user.id ? 'border-black bg-gray-50' : 'border-gray-200'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className={`font-semibold text-black ${unreadCount > 0 ? 'font-bold' : ''}`}>
+                                {user.firstName} {user.lastName}
+                              </span>
+                              {unreadCount > 0 && (
+                                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-black text-[11px] font-bold text-white">
+                                  {unreadCount > 9 ? '9+' : unreadCount}
+                                </span>
+                              )}
+                            </div>
+                            {lastMsg ? (
+                              <div className={`text-sm truncate mt-0.5 ${unreadCount > 0 ? 'text-black font-medium' : 'text-black/60'}`}>
+                                {lastMsg.senderId === sbUser?.id ? 'You: ' : ''}{lastMsg.text}
+                              </div>
+                            ) : user.linkedinUrl ? (
+                              <div className="text-xs text-blue-600 truncate">
+                                LinkedIn connected
+                              </div>
+                            ) : null}
+                          </div>
+                          {lastMsg && (
+                            <div className={`text-xs whitespace-nowrap ${unreadCount > 0 ? 'text-black font-semibold' : 'text-black/50'}`}>
+                              {formatDate(lastMsg.createdAt)}
+                            </div>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+            
+            {/* Right side - Chat */}
+            <div className="relative h-full">
+              {!selectedChatUser ? (
+                <div className="h-full flex items-center justify-center text-black/50">
+                  Select a connection to start messaging
+                </div>
+              ) : (
+                <>
+                  {/* Chat header */}
+                  <div className="border-b pb-4 mb-4">
+                    <div className="font-bold text-lg text-black">
+                      {selectedChatUser.firstName} {selectedChatUser.lastName}
+                    </div>
+                    {selectedChatUser.linkedinUrl && (
+                      <a
+                        href={selectedChatUser.linkedinUrl.startsWith('http') ? selectedChatUser.linkedinUrl : `https://${selectedChatUser.linkedinUrl}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm text-blue-600 hover:underline"
+                      >
+                        View LinkedIn Profile
+                      </a>
+                    )}
+                  </div>
+                  
+                  {/* Messages - scrollable area with padding at bottom for input */}
+                  <div data-messages-container className="absolute inset-0 top-16 bottom-16 overflow-y-auto space-y-3 pr-2 flex flex-col">
+                    <div className="flex-1" />
+                    {messages.length === 0 ? (
+                      <div className="text-center text-black/50 py-8">
+                        No messages yet. Say hello!
+                      </div>
+                    ) : (
+                      messages.map((msg) => (
+                        <div
+                          key={msg.id}
+                          className={`flex ${msg.senderId === sbUser?.id ? 'justify-end' : 'justify-start'}`}
+                        >
+                          <div
+                            className={`max-w-[70%] rounded-2xl px-4 py-2 ${
+                              msg.senderId === sbUser?.id
+                                ? 'bg-black text-white'
+                                : 'bg-gray-100 text-black'
+                            }`}
+                          >
+                            <div className="text-sm">{msg.text}</div>
+                            <div className={`text-xs mt-1 ${
+                              msg.senderId === sbUser?.id ? 'text-white/60' : 'text-black/40'
+                            }`}>
+                              {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                  
+                  {/* Message input - fixed at bottom */}
+                  <div className="absolute bottom-0 left-0 right-0 flex gap-3 bg-white pt-3">
+                    <input
+                      type="text"
+                      value={messageInput}
+                      onChange={(e) => setMessageInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          sendMessage();
+                        }
+                      }}
+                      placeholder="Type a message..."
+                      className="flex-1 rounded-xl border border-gray-300 px-4 py-3 text-sm text-black focus:border-black focus:outline-none"
+                    />
+                    <button
+                      onClick={sendMessage}
+                      disabled={!messageInput.trim()}
+                      className="rounded-xl border border-black bg-black px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-gray-800 disabled:opacity-50"
+                    >
+                      Send
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  );
+}
+
+  /* ---------- edit profile ---------- */
+
+if (screen === "editProfile") {
+  const handleSaveProfile = async () => {
+    if (!sbUser?.id) return;
+    
+    setSavingProfile(true);
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({
+          first_name: studentProfile.firstName,
+          last_name: studentProfile.lastName,
+          year: seatedRole === 'student' ? studentProfile.year : null,
+          major: seatedRole === 'student' ? studentProfile.major : null,
+          school: studentProfile.school || null,
+          company: seatedRole === 'professional' ? studentProfile.company : null,
+          work_title: seatedRole === 'professional' ? studentProfile.workTitle : null,
+          linkedin_url: studentProfile.linkedinUrl || null,
+        })
+        .eq('id', sbUser.id);
+      
+      if (error) {
+        alert('Failed to save: ' + error.message);
+      } else {
+        alert('Profile updated!');
+        setScreen(seatedRole === 'professional' ? 'professionalDashboard' : 'dashboard');
+      }
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+  
+  return (
+    <main className="relative flex min-h-screen items-center justify-center bg-black px-6">
+      <div className="w-full max-w-md">
+        <h1 className="mb-6 text-center text-3xl font-bold">Edit Profile</h1>
+
+        <div className="flex flex-col gap-4">
+          <input
+            type="text"
+            placeholder="First name"
+            value={studentProfile.firstName}
+            onChange={(e) =>
+              setStudentProfile({ ...studentProfile, firstName: e.target.value })
+            }
+            className="rounded-xl border px-4 py-3 text-sm"
+          />
+
+          <input
+            type="text"
+            placeholder="Last name"
+            value={studentProfile.lastName}
+            onChange={(e) =>
+              setStudentProfile({ ...studentProfile, lastName: e.target.value })
+            }
+            className="rounded-xl border px-4 py-3 text-sm"
+          />
+
+          <input
+            type="text"
+            placeholder="LinkedIn URL (optional)"
+            value={studentProfile.linkedinUrl}
+            onChange={(e) =>
+              setStudentProfile({ ...studentProfile, linkedinUrl: e.target.value })
+            }
+            className="rounded-xl border px-4 py-3 text-sm"
+          />
+
+          {seatedRole === "student" && (
+            <>
+              <input
+                type="text"
+                placeholder="School"
+                value={studentProfile.school}
+                onChange={(e) =>
+                  setStudentProfile({ ...studentProfile, school: e.target.value })
+                }
+                className="rounded-xl border px-4 py-3 text-sm"
+              />
+
+              <input
+                type="text"
+                placeholder="Year"
+                value={studentProfile.year}
+                onChange={(e) =>
+                  setStudentProfile({ ...studentProfile, year: e.target.value })
+                }
+                className="rounded-xl border px-4 py-3 text-sm"
+              />
+
+              <input
+                type="text"
+                placeholder="Major"
+                value={studentProfile.major}
+                onChange={(e) =>
+                  setStudentProfile({ ...studentProfile, major: e.target.value })
+                }
+                className="rounded-xl border px-4 py-3 text-sm"
+              />
+            </>
+          )}
+
+          {seatedRole === "professional" && (
+            <>
+              <input
+                type="text"
+                placeholder="School"
+                value={studentProfile.school}
+                onChange={(e) =>
+                  setStudentProfile({ ...studentProfile, school: e.target.value })
+                }
+                className="rounded-xl border px-4 py-3 text-sm"
+              />
+
+              <input
+                type="text"
+                placeholder="Company"
+                value={studentProfile.company}
+                onChange={(e) =>
+                  setStudentProfile({ ...studentProfile, company: e.target.value })
+                }
+                className="rounded-xl border px-4 py-3 text-sm"
+              />
+
+              <input
+                type="text"
+                placeholder="Work title"
+                value={studentProfile.workTitle}
+                onChange={(e) =>
+                  setStudentProfile({ ...studentProfile, workTitle: e.target.value })
+                }
+                className="rounded-xl border px-4 py-3 text-sm"
+              />
+            </>
+          )}
+
+          <button
+            type="button"
+            onClick={handleSaveProfile}
+            disabled={savingProfile}
+            className="mt-4 rounded-2xl border px-4 py-3 text-sm font-semibold transition-colors hover:bg-gray-50 disabled:opacity-50"
+          >
+            {savingProfile ? 'Saving...' : 'Save Changes'}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setScreen(seatedRole === 'professional' ? 'professionalDashboard' : 'dashboard')}
+            className="rounded-2xl border px-4 py-3 text-sm font-semibold transition-colors hover:bg-gray-50"
+          >
+            Cancel
+          </button>
         </div>
       </div>
     </main>
@@ -3647,6 +5076,7 @@ const displayedHistoryBoard = viewingSnapshot
   onCancel={() => setShowTitleScreenConfirm(false)}
   onConfirm={() => {
     setShowTitleScreenConfirm(false);
+    setOpponentName(null);
     
     // Cleanup multiplayer and broadcast quit
     if (mpHost) {
@@ -3659,6 +5089,10 @@ const displayedHistoryBoard = viewingSnapshot
     }
     setMultiplayerActive(false);
     setOpponentQuit(false);
+    setPlayAgainRequested(false);
+    setOpponentWantsPlayAgain(false);
+    setPlayAgainRequested(false);
+    setOpponentWantsPlayAgain(false);
     
     // Clear saved session so we don't reconnect
     sessionStorage.removeItem('headsup_gameId');
@@ -3679,23 +5113,162 @@ const displayedHistoryBoard = viewingSnapshot
   }}
 />
 
-      <main className="relative flex items-center justify-center bg-black px-6 py-1 overflow-y-auto" style={{ minHeight: '100vh' }}>
-      {((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver)) && !playAgainRequested && (
-  <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50">
-    <button
-      onClick={() => setPlayAgainRequested(true)}
-      className="rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border border-black bg-white px-6 py-2 min-[1536px]:max-[1650px]:px-4 min-[1536px]:max-[1650px]:py-1.5 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm hover:bg-gray-50"
-    >
-      Play Again?
-    </button>
-  </div>
-)}
+<ConfirmModal
+  open={showDashboardConfirm}
+  title="Go to Dashboard?"
+  message="Are you sure you'd like to go to the Dashboard? If you do, the game will end and stack sizes and positions will reset."
+  cancelText="Go back"
+  confirmText="Confirm"
+  onCancel={() => setShowDashboardConfirm(false)}
+  onConfirm={() => {
+    setShowDashboardConfirm(false);
+    setOpponentName(null);
+    
+    // Cleanup multiplayer and broadcast quit
+    if (mpHost) {
+      mpHost.destroy();
+      setMpHost(null);
+    }
+    if (mpJoiner) {
+      mpJoiner.destroy();
+      setMpJoiner(null);
+    }
+    setMultiplayerActive(false);
+    setOpponentQuit(false);
+    setPlayAgainRequested(false);
+    setOpponentWantsPlayAgain(false);
+    
+    // Clear saved session so we don't reconnect
+    sessionStorage.removeItem('headsup_gameId');
+    sessionStorage.removeItem('headsup_mySeat');
+    sessionStorage.removeItem('headsup_gamePin');
+    sessionStorage.removeItem('headsup_dealerOffset');
+    sessionStorage.removeItem('headsup_hostState');
+    sessionStorage.removeItem('headsup_handHistory');
+    
+    clearTimers();
+    clearPin();
+    setGamePin(null);
+    setJoinMode(false);
+    setJoinPinInput("");
+    setScreen(seatedRole === "professional" ? "professionalDashboard" : "dashboard");
+  }}
+/>
 
-{((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver)) && playAgainRequested && (
-  <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border border-black bg-white px-6 py-2 min-[1536px]:max-[1650px]:px-4 min-[1536px]:max-[1650px]:py-1.5 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm">
-    Invited &quot;Opponent&quot; to play again, waiting for &quot;Opponent&apos;s&quot; response...
-  </div>
-)}
+      <main className="relative flex items-center justify-center bg-black px-6 py-1 overflow-y-auto" style={{ minHeight: '100vh' }}>
+     {/* Play Again UI - only show in multiplayer when game is over and opponent hasn't quit */}
+      {multiplayerActive && mpState?.gameOver && !opponentQuit && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50">
+          {/* State 1: Neither player has requested - show Play Again button */}
+          {!playAgainRequested && !opponentWantsPlayAgain && (
+            <button
+              onClick={() => {
+                setPlayAgainRequested(true);
+                // Send broadcast to opponent via the existing channel
+                if (isHost && mpHost) {
+                  mpHost['channel'].send({
+                    type: "broadcast",
+                    event: "mp",
+                    payload: {
+                      event: "PLAY_AGAIN_REQUEST",
+                      sender: sbUser?.id ?? 'host',
+                    },
+                  });
+                } else if (mpJoiner) {
+                  mpJoiner['channel'].send({
+                    type: "broadcast",
+                    event: "mp",
+                    payload: {
+                      event: "PLAY_AGAIN_REQUEST",
+                      sender: sbUser?.id ?? 'joiner',
+                    },
+                  });
+                }
+              }}
+              className="rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border border-black bg-white px-6 py-2 min-[1536px]:max-[1650px]:px-4 min-[1536px]:max-[1650px]:py-1.5 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm hover:bg-gray-50"
+            >
+              Play Again?
+            </button>
+          )}
+          
+          {/* State 2: I requested, waiting for opponent */}
+          {playAgainRequested && !opponentWantsPlayAgain && (
+            <div className="rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border border-black bg-white px-6 py-2 min-[1536px]:max-[1650px]:px-4 min-[1536px]:max-[1650px]:py-1.5 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm">
+              Sent request to {opponentName || "Opponent"}, waiting for response...
+            </div>
+          )}
+          
+          {/* State 3: Opponent requested, show Accept button */}
+          {opponentWantsPlayAgain && !playAgainRequested && (
+            <div className="flex items-center gap-3 rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border border-black bg-white px-6 py-2 min-[1536px]:max-[1650px]:px-4 min-[1536px]:max-[1650px]:py-1.5 shadow-sm">
+              <span className="text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black">
+                {opponentName || "Opponent"} wants to play again
+              </span>
+              <button
+                onClick={() => {
+                  // Send accept to opponent
+                  if (isHost && mpHost) {
+                    mpHost['channel'].send({
+                      type: "broadcast",
+                      event: "mp",
+                      payload: {
+                        event: "PLAY_AGAIN_ACCEPT",
+                        sender: sbUser?.id ?? 'host',
+                      },
+                    });
+                    // Host resets the game immediately
+                    setPlayAgainRequested(false);
+                    setOpponentWantsPlayAgain(false);
+                    setHandLogHistory([]);
+                    setLogViewOffset(0);
+                    mpHost.resetGame();
+                    setMpState(JSON.parse(JSON.stringify(mpHost.getState())));
+                  } else if (mpJoiner) {
+                    mpJoiner['channel'].send({
+                      type: "broadcast",
+                      event: "mp",
+                      payload: {
+                        event: "PLAY_AGAIN_ACCEPT",
+                        sender: sbUser?.id ?? 'joiner',
+                      },
+                    });
+                    // Joiner just clears states - will receive new state from host
+                    setPlayAgainRequested(false);
+                    setOpponentWantsPlayAgain(false);
+                    setHandLogHistory([]);
+                    setLogViewOffset(0);
+                  }
+                }}
+                className="rounded-xl border border-green-600 bg-green-50 px-4 py-1 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-green-600 hover:bg-green-100"
+              >
+                Accept
+              </button>
+            </div>
+          )}
+          
+          {/* State 4: Both requested - starting new game */}
+          {playAgainRequested && opponentWantsPlayAgain && (
+            <div className="rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border border-black bg-white px-6 py-2 min-[1536px]:max-[1650px]:px-4 min-[1536px]:max-[1650px]:py-1.5 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm">
+              Starting new game...
+            </div>
+          )}
+        </div>
+      )}
+      
+      {/* Single player Play Again */}
+      {!multiplayerActive && gameOver && !playAgainRequested && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50">
+          <button
+            onClick={() => {
+              setPlayAgainRequested(true);
+              resetGame();
+            }}
+            className="rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border border-black bg-white px-6 py-2 min-[1536px]:max-[1650px]:px-4 min-[1536px]:max-[1650px]:py-1.5 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm hover:bg-gray-50"
+          >
+            Play Again?
+          </button>
+        </div>
+      )}
 
 {/* Show Hand Button */}
 {displayHandResult.status === "ended" && 
@@ -3766,12 +5339,41 @@ const displayedHistoryBoard = viewingSnapshot
 
             <div className="flex items-center gap-4 min-[1536px]:max-[1650px]:gap-3">
 
-  {studentProfile.email && !gamePin && (
+  {studentProfile.email && (
   <button
 type="button"
-onClick={() =>
-setScreen(seatedRole === "professional" ? "professionalDashboard" : "dashboard")
-}
+onClick={() => {
+  if (opponentQuit) {
+    // Opponent already quit, go directly to dashboard
+    if (mpHost) {
+      mpHost.destroy();
+      setMpHost(null);
+    }
+    if (mpJoiner) {
+      mpJoiner.destroy();
+      setMpJoiner(null);
+    }
+    setMultiplayerActive(false);
+    setOpponentQuit(false);
+    setOpponentName(null);
+    
+    sessionStorage.removeItem('headsup_gameId');
+    sessionStorage.removeItem('headsup_mySeat');
+    sessionStorage.removeItem('headsup_gamePin');
+    sessionStorage.removeItem('headsup_dealerOffset');
+    sessionStorage.removeItem('headsup_hostState');
+    sessionStorage.removeItem('headsup_handHistory');
+    
+    clearTimers();
+    clearPin();
+    setGamePin(null);
+    setJoinMode(false);
+    setJoinPinInput("");
+    setScreen(seatedRole === "professional" ? "professionalDashboard" : "dashboard");
+  } else {
+    setShowDashboardConfirm(true);
+  }
+}}
 className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacity-80 hover:opacity-100"
 >
     Dashboard
@@ -3793,6 +5395,7 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
         }
         setMultiplayerActive(false);
         setOpponentQuit(false);
+        setOpponentName(null);
         
         // Clear saved session so we don't reconnect
         sessionStorage.removeItem('headsup_gameId');
@@ -4007,7 +5610,7 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
                 </div>
 
                 <div className="flex h-full flex-col justify-center">
-                  <div className="-mt-3 min-[1536px]:max-[1650px]:-mt-2 text-sm min-[1536px]:max-[1650px]:text-xs uppercase text-white opacity-60">Opponent</div>
+                  <div className="-mt-3 min-[1536px]:max-[1650px]:-mt-2 text-sm min-[1536px]:max-[1650px]:text-xs uppercase text-white opacity-60">{opponentName || "Opponent"}</div>
                   <div className="mt-2 min-[1536px]:max-[1650px]:mt-1 text-sm min-[1536px]:max-[1650px]:text-xs text-white">
                     Stack:{" "}
                     <span className="font-semibold tabular-nums">{formatBB(oppStack)}bb</span>
@@ -4064,7 +5667,7 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
 
                 <div className="flex h-full flex-col justify-center">
                   <div className="text-sm min-[1536px]:max-[1650px]:text-xs uppercase text-white opacity-60">You</div>
-                  <div className="text-xl min-[1536px]:max-[1650px]:text-base font-semibold capitalize text-white">{seatedRole}</div>
+                  <div className="text-xl min-[1536px]:max-[1650px]:text-base font-semibold capitalize text-white">{studentProfile.firstName || "Guest"}</div>
 
                   <div className="mt-2 min-[1536px]:max-[1650px]:mt-1 text-sm min-[1536px]:max-[1650px]:text-xs text-white">
                     Stack:{" "}

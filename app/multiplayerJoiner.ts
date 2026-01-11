@@ -12,7 +12,7 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 import type { HostState, Seat, GameAction } from "./multiplayerHost";
 
 export class MultiplayerJoiner {
-  private channel: RealtimeChannel;
+  public channel: RealtimeChannel;
   private userId: string;
   private onStateUpdate: (state: HostState) => void;
   
