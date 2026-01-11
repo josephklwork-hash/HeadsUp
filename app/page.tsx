@@ -496,6 +496,41 @@ function ConfirmModal({
 /* ---------- main ---------- */
 
 export default function Home() {
+  // Dynamic scaling based on viewport
+  const [gameScale, setGameScale] = useState(1);
+  
+  useEffect(() => {
+    function calculateScale() {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      
+      // Base design: 1512px width (your Mac)
+      // Scale down proportionally for smaller screens
+      let scale = 1;
+      
+      if (width <= 1366) {
+        scale = 0.7;  // Small laptops
+      } else if (width <= 1650) {
+        scale = 0.78; // Your Windows laptop range
+      } else if (width <= 1920) {
+        scale = 0.95; // Full HD
+      } else if (width >= 2560) {
+        scale = 1.1;  // Large monitors
+      }
+      
+      // Also consider height for very short screens
+      if (height < 800) {
+        scale = Math.min(scale, 0.75);
+      }
+      
+      setGameScale(scale);
+    }
+    
+    calculateScale();
+    window.addEventListener('resize', calculateScale);
+    return () => window.removeEventListener('resize', calculateScale);
+  }, []);
+
   const [seatedRole, setSeatedRole] = useState<Role | null>(null);
 
   const [handId, setHandId] = useState(0);
@@ -3534,7 +3569,7 @@ const displayedHistoryBoard = viewingSnapshot
   }}
 />
 
-      <main className="relative flex items-center justify-center bg-black px-6 py-1 overflow-y-auto" style={{ minHeight: '100vh' }}>
+      <main className="relative flex items-center justify-center bg-black px-6 py-1 overflow-y-auto" style={{ minHeight: '100vh', transform: `scale(${gameScale})`, transformOrigin: 'center center' }}>
       {((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver)) && !playAgainRequested && (
   <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50">
     <button
