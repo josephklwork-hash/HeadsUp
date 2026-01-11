@@ -51,7 +51,6 @@ export class MultiplayerJoiner {
       if (payload.event === "HOST_STATE" && payload.state) {
         this.state = payload.state as HostState;
         this.onStateUpdate(this.state);
-        console.log("Received HOST_STATE from host");
       }
       
       // Handle opponent quit
@@ -77,10 +76,8 @@ export class MultiplayerJoiner {
           kind: "REQUEST_SNAPSHOT",
           sender: this.userId,
         },
-      }).then(() => {
-        console.log("Requested state from host");
-      }).catch((err) => {
-        console.error("Request failed:", err);
+      }).catch(() => {
+        // Silently ignore request errors
       });
     }, 300);
   }
@@ -98,10 +95,8 @@ export class MultiplayerJoiner {
         action,
         sender: this.userId,
       },
-    }).then(() => {
-      console.log("Sent action:", action.type);
-    }).catch((err) => {
-      console.error("Action send failed:", err);
+    }).catch(() => {
+      // Silently ignore send errors
     });
   }
   
@@ -109,7 +104,6 @@ export class MultiplayerJoiner {
    * Send show hand action to the host
    */
   public sendShowHand(seat: Seat) {
-    console.log("Joiner sending SHOW_HAND:", seat);
     this.channel.send({
       type: "broadcast",
       event: "mp",
@@ -118,10 +112,8 @@ export class MultiplayerJoiner {
         seat,
         sender: this.userId,
       },
-    }).then(() => {
-      console.log("Sent show hand successfully");
-    }).catch((err) => {
-      console.error("Show hand send failed:", err);
+    }).catch(() => {
+      // Silently ignore send errors
     });
   }
   

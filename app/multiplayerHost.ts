@@ -241,7 +241,6 @@ constructor(channel: RealtimeChannel, userId: string, initialDealerOffset: 0 | 1
   // Initialize game state - use saved state if provided, otherwise create fresh
   if (savedState) {
     this.state = savedState;
-    console.log('Host restored from saved state, handId:', savedState.handId);
   } else {
     this.state = this.createInitialState(initialDealerOffset);
   }
@@ -297,8 +296,24 @@ private createInitialState(initialDealerOffset: 0 | 1): HostState {
       // Ignore own messages
       if (payload.sender === this.userId) return;
       
-      // Handle player actions
+      // Handle player actions - only accept actions from joiner's seat (top)
       if (payload.event === "ACTION" && payload.seat && payload.action) {
+        // Joiner can only control "top" seat - reject attempts to control host's seat
+        if (payload.seat !== "top") return;
+        
+        // Verify sender is not the host (prevent self-spoofing)
+        if (payload.sender === this.userId) return;
+        
+        // Validate action type
+        const validActions = ["FOLD", "CHECK", "CALL", "BET_RAISE_TO"];
+        if (!validActions.includes(payload.action.type)) return;
+        
+        // Validate bet amount if present
+        if (payload.action.type === "BET_RAISE_TO") {
+          const amount = payload.action.to;
+          if (typeof amount !== "number" || !Number.isFinite(amount) || amount < 0) return;
+        }
+        
         this.processAction(payload.seat as Seat, payload.action as GameAction);
       }
       
@@ -307,22 +322,13 @@ private createInitialState(initialDealerOffset: 0 | 1): HostState {
         this.broadcastFullState();
       }
       
-      // Handle show hand action
+      // Handle show hand action - only accept from joiner's seat (top)
       if (payload.event === "SHOW_HAND" && payload.seat) {
-        console.log("Host received SHOW_HAND event");
-        console.log("  - Seat:", payload.seat);
-        console.log("  - canShowTop:", this.state.canShowTop);
-        console.log("  - canShowBottom:", this.state.canShowBottom);
-        console.log("  - topShowed:", this.state.topShowed);
-        console.log("  - bottomShowed:", this.state.bottomShowed);
+        // Joiner can only show "top" seat
+        if (payload.seat !== "top") return;
         
         this.handleShowHand(payload.seat as Seat);
-        
-        console.log("After handleShowHand:");
-        console.log("  - topShowed:", this.state.topShowed);
-        console.log("  - bottomShowed:", this.state.bottomShowed);
-        
-        this.broadcastFullState(); // Broadcast updated state back to joiner
+        this.broadcastFullState();
         
         // Notify host to update its display
         if (this.onStateChange) {
@@ -332,7 +338,6 @@ private createInitialState(initialDealerOffset: 0 | 1): HostState {
       
       // Handle joiner quit
       if (payload.event === "PLAYER_QUIT") {
-        console.log("Host received PLAYER_QUIT from joiner");
         if (this.onOpponentQuit) {
           this.onOpponentQuit();
         }
@@ -811,10 +816,8 @@ if (this.onStateChange) {
         sender: this.userId,
         state: this.state,
       },
-    }).then(() => {
-      console.log("Broadcast: HOST_STATE");
-    }).catch((err) => {
-      console.error("Broadcast failed:", err);
+    }).catch(() => {
+      // Silently ignore broadcast errors
     });
   }
   
@@ -844,10 +847,8 @@ if (this.onStateChange) {
         action,
         sender: this.userId,
       },
-    }).then(() => {
-      console.log("Sent action:", action.type);
-    }).catch((err) => {
-      console.error("Action send failed:", err);
+    }).catch(() => {
+      // Silently ignore send errors
     });
   }
   
@@ -855,7 +856,6 @@ if (this.onStateChange) {
    * Send show hand action to the host
    */
   public sendShowHand(seat: Seat) {
-    console.log("Joiner sending SHOW_HAND:", seat);
     this.channel.send({
       type: "broadcast",
       event: "mp",
@@ -864,10 +864,8 @@ if (this.onStateChange) {
         seat,
         sender: this.userId,
       },
-    }).then(() => {
-      console.log("Sent show hand successfully");
-    }).catch((err) => {
-      console.error("Show hand send failed:", err);
+    }).catch(() => {
+      // Silently ignore send errors
     });
   }
   
@@ -892,7 +890,6 @@ if (this.onStateChange) {
     // Start the first hand
     this.startHand();
     
-    console.log('Host reset game, new session:', this.state.gameSession);
   }
   
   /**

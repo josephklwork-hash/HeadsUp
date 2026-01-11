@@ -150,6 +150,348 @@ function clamp(n: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, n));
 }
 
+function uid() {
+  return Math.random().toString(16).slice(2) + "-" + Date.now().toString(16);
+}
+
+/* ============================================
+   SECURITY MODULE - OWASP Best Practices
+   ============================================
+   This module provides:
+   - Input validation & sanitization
+   - Rate limiting utilities
+   - Schema-based validation
+   - XSS prevention
+   ============================================ */
+
+// --------------------------------------------
+// RATE LIMITING CONFIGURATION
+// --------------------------------------------
+const RATE_LIMITS = {
+  // Auth operations (prevent brute force)
+  LOGIN: { maxAttempts: 5, windowMs: 60000, lockoutMs: 300000 },      // 5 attempts/min, 5min lockout
+  SIGNUP: { maxAttempts: 3, windowMs: 60000, lockoutMs: 600000 },     // 3 attempts/min, 10min lockout
+  PIN_JOIN: { maxAttempts: 5, windowMs: 60000, lockoutMs: 60000 },    // 5 attempts/min, 1min lockout
+  
+  // Data operations (prevent spam/abuse)
+  GAME_CREATE: { maxAttempts: 10, windowMs: 3600000, lockoutMs: 0 },  // 10/hour (handled by SQL)
+  MESSAGE_SEND: { maxAttempts: 30, windowMs: 60000, lockoutMs: 30000 }, // 30/min, 30s lockout
+  CONNECTION_REQUEST: { maxAttempts: 20, windowMs: 3600000, lockoutMs: 0 }, // 20/hour
+} as const;
+
+type RateLimitKey = keyof typeof RATE_LIMITS;
+
+// In-memory rate limit tracking (resets on page refresh - for client-side protection)
+// Server-side RLS provides the real protection
+const rateLimitStore: Record<string, { attempts: number; firstAttempt: number; lockedUntil: number }> = {};
+
+/**
+ * Check if an action is rate limited
+ * @returns { allowed: boolean, remainingAttempts: number, retryAfter: number }
+ */
+function checkRateLimit(key: RateLimitKey, identifier: string = 'default'): { 
+  allowed: boolean; 
+  remainingAttempts: number; 
+  retryAfter: number;
+  message: string;
+} {
+  const config = RATE_LIMITS[key];
+  const storeKey = `${key}:${identifier}`;
+  const now = Date.now();
+  
+  // Initialize or get existing record
+  if (!rateLimitStore[storeKey]) {
+    rateLimitStore[storeKey] = { attempts: 0, firstAttempt: now, lockedUntil: 0 };
+  }
+  
+  const record = rateLimitStore[storeKey];
+  
+  // Check if currently locked out
+  if (record.lockedUntil > now) {
+    const retryAfter = Math.ceil((record.lockedUntil - now) / 1000);
+    return {
+      allowed: false,
+      remainingAttempts: 0,
+      retryAfter,
+      message: `Too many attempts. Please try again in ${retryAfter} seconds.`
+    };
+  }
+  
+  // Reset window if expired
+  if (now - record.firstAttempt > config.windowMs) {
+    record.attempts = 0;
+    record.firstAttempt = now;
+  }
+  
+  // Check if over limit
+  if (record.attempts >= config.maxAttempts) {
+    record.lockedUntil = now + config.lockoutMs;
+    const retryAfter = Math.ceil(config.lockoutMs / 1000);
+    return {
+      allowed: false,
+      remainingAttempts: 0,
+      retryAfter,
+      message: `Rate limit exceeded. Please try again in ${retryAfter} seconds.`
+    };
+  }
+  
+  return {
+    allowed: true,
+    remainingAttempts: config.maxAttempts - record.attempts,
+    retryAfter: 0,
+    message: ''
+  };
+}
+
+/**
+ * Record an attempt for rate limiting
+ */
+function recordRateLimitAttempt(key: RateLimitKey, identifier: string = 'default'): void {
+  const storeKey = `${key}:${identifier}`;
+  if (!rateLimitStore[storeKey]) {
+    rateLimitStore[storeKey] = { attempts: 0, firstAttempt: Date.now(), lockedUntil: 0 };
+  }
+  rateLimitStore[storeKey].attempts++;
+}
+
+/**
+ * Reset rate limit (e.g., after successful login)
+ */
+function resetRateLimit(key: RateLimitKey, identifier: string = 'default'): void {
+  const storeKey = `${key}:${identifier}`;
+  delete rateLimitStore[storeKey];
+}
+
+// --------------------------------------------
+// INPUT VALIDATION SCHEMAS
+// --------------------------------------------
+const VALIDATION_SCHEMAS = {
+  email: {
+    pattern: /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/,
+    maxLength: 254,
+    minLength: 5,
+    errorMessage: 'Please enter a valid email address'
+  },
+  password: {
+    minLength: 8,
+    maxLength: 128,
+    requireUppercase: true,
+    requireLowercase: true,
+    requireNumber: true,
+    requireSpecial: false,
+    errorMessage: 'Password must be at least 8 characters with uppercase, lowercase, and number'
+  },
+  name: {
+    pattern: /^[a-zA-Z\s'-]+$/,
+    maxLength: 50,
+    minLength: 1,
+    errorMessage: 'Name can only contain letters, spaces, hyphens, and apostrophes'
+  },
+  linkedinUrl: {
+    pattern: /^https?:\/\/(www\.)?linkedin\.com\/in\/[\w-]+\/?$/i,
+    maxLength: 200,
+    minLength: 0, // Optional
+    errorMessage: 'Please enter a valid LinkedIn URL (e.g., https://linkedin.com/in/yourname)'
+  },
+  gamePin: {
+    pattern: /^\d{4}$/,
+    maxLength: 4,
+    minLength: 4,
+    errorMessage: 'PIN must be exactly 4 digits'
+  },
+  message: {
+    maxLength: 2000,
+    minLength: 1,
+    errorMessage: 'Message must be between 1 and 2000 characters'
+  },
+  generalText: {
+    maxLength: 200,
+    minLength: 0,
+    errorMessage: 'Text exceeds maximum length'
+  }
+} as const;
+
+type ValidationSchemaKey = keyof typeof VALIDATION_SCHEMAS;
+
+/**
+ * Validate input against a schema
+ * @returns { valid: boolean, sanitized: string, error: string }
+ */
+function validateInput(
+  value: string, 
+  schemaKey: ValidationSchemaKey,
+  options?: { required?: boolean }
+): { valid: boolean; sanitized: string; error: string } {
+  const schema = VALIDATION_SCHEMAS[schemaKey];
+  const required = options?.required ?? false;
+  
+  // Handle empty values
+  if (!value || value.trim() === '') {
+    if (required) {
+      return { valid: false, sanitized: '', error: 'This field is required' };
+    }
+    return { valid: true, sanitized: '', error: '' };
+  }
+  
+  // Sanitize: trim whitespace, remove null bytes, strip HTML tags
+  let sanitized = value
+    .trim()
+    .replace(/\0/g, '')           // Remove null bytes
+    .replace(/<[^>]*>/g, '')      // Strip HTML tags
+    .replace(/[<>]/g, '')         // Remove remaining angle brackets
+    .slice(0, schema.maxLength);  // Enforce max length
+  
+  // Check minimum length
+  if ('minLength' in schema && sanitized.length < schema.minLength) {
+    return { 
+      valid: false, 
+      sanitized, 
+      error: schema.errorMessage 
+    };
+  }
+  
+  // Check pattern if exists
+  if ('pattern' in schema && schema.pattern && !schema.pattern.test(sanitized)) {
+    return { 
+      valid: false, 
+      sanitized, 
+      error: schema.errorMessage 
+    };
+  }
+  
+  return { valid: true, sanitized, error: '' };
+}
+
+/**
+ * Validate password with detailed requirements
+ */
+function validatePassword(password: string): { 
+  valid: boolean; 
+  errors: string[];
+  strength: 'weak' | 'medium' | 'strong';
+} {
+  const errors: string[] = [];
+  const schema = VALIDATION_SCHEMAS.password;
+  
+  if (password.length < schema.minLength) {
+    errors.push(`Password must be at least ${schema.minLength} characters`);
+  }
+  if (password.length > schema.maxLength) {
+    errors.push(`Password must be less than ${schema.maxLength} characters`);
+  }
+  if (schema.requireUppercase && !/[A-Z]/.test(password)) {
+    errors.push('Password must contain an uppercase letter');
+  }
+  if (schema.requireLowercase && !/[a-z]/.test(password)) {
+    errors.push('Password must contain a lowercase letter');
+  }
+  if (schema.requireNumber && !/[0-9]/.test(password)) {
+    errors.push('Password must contain a number');
+  }
+  if (schema.requireSpecial && !/[!@#$%^&*(),.?":{}|<>]/.test(password)) {
+    errors.push('Password must contain a special character');
+  }
+  
+  // Calculate strength
+  let strength: 'weak' | 'medium' | 'strong' = 'weak';
+  if (errors.length === 0) {
+    const hasSpecial = /[!@#$%^&*(),.?":{}|<>]/.test(password);
+    const isLong = password.length >= 12;
+    if (hasSpecial && isLong) {
+      strength = 'strong';
+    } else if (hasSpecial || isLong) {
+      strength = 'medium';
+    } else {
+      strength = 'medium';
+    }
+  }
+  
+  return { valid: errors.length === 0, errors, strength };
+}
+
+/**
+ * Validate email format
+ */
+function validateEmail(email: string): { valid: boolean; sanitized: string; error: string } {
+  return validateInput(email, 'email', { required: true });
+}
+
+/**
+ * Sanitize and validate a profile object
+ * Rejects unexpected fields (defense against mass assignment)
+ */
+function validateProfileData(data: Record<string, unknown>): {
+  valid: boolean;
+  sanitized: Record<string, string>;
+  errors: Record<string, string>;
+} {
+  const allowedFields = ['firstName', 'lastName', 'email', 'year', 'major', 'school', 'company', 'workTitle', 'linkedinUrl'];
+  const sanitized: Record<string, string> = {};
+  const errors: Record<string, string> = {};
+  
+  // Reject unexpected fields
+  for (const key of Object.keys(data)) {
+    if (!allowedFields.includes(key)) {
+      errors[key] = `Unexpected field: ${key}`;
+    }
+  }
+  
+  // Validate each allowed field
+  const fieldValidations: Record<string, { schema: ValidationSchemaKey; required: boolean }> = {
+    firstName: { schema: 'name', required: true },
+    lastName: { schema: 'name', required: true },
+    email: { schema: 'email', required: true },
+    year: { schema: 'generalText', required: false },
+    major: { schema: 'generalText', required: false },
+    school: { schema: 'generalText', required: false },
+    company: { schema: 'generalText', required: false },
+    workTitle: { schema: 'generalText', required: false },
+    linkedinUrl: { schema: 'linkedinUrl', required: false },
+  };
+  
+  for (const [field, config] of Object.entries(fieldValidations)) {
+    const value = data[field];
+    if (typeof value === 'string' || value === undefined || value === null) {
+      const result = validateInput(String(value || ''), config.schema, { required: config.required });
+      sanitized[field] = result.sanitized;
+      if (!result.valid) {
+        errors[field] = result.error;
+      }
+    } else {
+      errors[field] = 'Invalid type: expected string';
+    }
+  }
+  
+  return {
+    valid: Object.keys(errors).length === 0,
+    sanitized,
+    errors
+  };
+}
+
+/**
+ * Validate message content
+ */
+function validateMessage(text: string): { valid: boolean; sanitized: string; error: string } {
+  if (!text || text.trim() === '') {
+    return { valid: false, sanitized: '', error: 'Message cannot be empty' };
+  }
+  
+  const result = validateInput(text, 'message', { required: true });
+  
+  // Additional XSS prevention for messages
+  result.sanitized = result.sanitized
+    .replace(/javascript:/gi, '')
+    .replace(/on\w+=/gi, '')
+    .replace(/data:/gi, '');
+  
+  return result;
+}
+
+/* ============================================
+   END SECURITY MODULE
+   ============================================ */
+
 function streetNameFromCount(street: Street): StreetName {
   if (street === 0) return "Preflop";
   if (street === 3) return "Flop";
@@ -157,9 +499,10 @@ function streetNameFromCount(street: Street): StreetName {
   return "River";
 }
 
-function uid() {
-  return Math.random().toString(16).slice(2) + "-" + Date.now().toString(16);
-}
+/* ---------- input validation helpers ---------- */
+// NOTE: Validation functions are now in the SECURITY MODULE above (lines 157-493)
+// Using: validatePassword, validateEmail, validateInput, validateProfileData, validateMessage
+// Old functions (isValidLinkedInUrl, sanitizeInput, isStrongPassword) have been removed
 
 /* ---------- simple poker evaluator (7-card) ---------- */
 
@@ -709,6 +1052,7 @@ const setStreetBettor = (next: any) =>
   const [joinMode, setJoinMode] = useState(false);
   const [joinPinInput, setJoinPinInput] = useState("");
   const [creatingGame, setCreatingGame] = useState(false);
+  const [pinLockoutUntil, setPinLockoutUntil] = useState<number | null>(null);
   const [isCreatingPin, setIsCreatingPin] = useState(false);
 
   const [gameId, setGameId] = useState<string | null>(null);
@@ -826,6 +1170,32 @@ const [lastMessages, setLastMessages] = useState<Map<string, { text: string; cre
 async function sendConnectionRequest(recipientId: string, recipientName: string) {
   if (!sbUser?.id) return;
   
+  // === INPUT VALIDATION ===
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuidPattern.test(recipientId)) {
+    alert('Invalid user');
+    return;
+  }
+  
+  if (recipientId === sbUser.id) {
+    alert('You cannot connect with yourself');
+    return;
+  }
+  
+  // Server-side rate limiting via RPC
+  const { data: allowed, error: rateError } = await supabase
+    .rpc('check_rate_limit', {
+      p_user_id: sbUser.id,
+      p_action_type: 'connection_request',
+      p_max_attempts: 20,
+      p_window_seconds: 3600
+    });
+  
+  if (rateError || !allowed) {
+    alert('Too many connection requests. Please wait before sending more.');
+    return;
+  }
+  
   const { error } = await supabase
     .from('connections')
     .insert({
@@ -838,7 +1208,7 @@ async function sendConnectionRequest(recipientId: string, recipientName: string)
     if (error.code === '23505') {
       alert('Connection request already sent!');
     } else {
-      alert('Failed to send request: ' + error.message);
+      alert('Failed to send request. Please try again.');
     }
     return;
   }
@@ -848,10 +1218,13 @@ async function sendConnectionRequest(recipientId: string, recipientName: string)
 }
 
 async function acceptConnection(odId: string, connectionId: string, odName: string) {
+  if (!sbUser?.id) return;
+  
   const { error } = await supabase
     .from('connections')
     .update({ status: 'accepted' })
-    .eq('id', connectionId);
+    .eq('id', connectionId)
+    .eq('recipient_id', sbUser.id); // Only recipient can accept
   
   if (error) {
     alert('Failed to accept: ' + error.message);
@@ -868,10 +1241,13 @@ async function acceptConnection(odId: string, connectionId: string, odName: stri
 }
 
 async function rejectConnection(odId: string, connectionId: string) {
+  if (!sbUser?.id) return;
+  
   const { error } = await supabase
     .from('connections')
     .update({ status: 'rejected' })
-    .eq('id', connectionId);
+    .eq('id', connectionId)
+    .eq('recipient_id', sbUser.id); // Only recipient can reject
   
   if (error) {
     alert('Failed to reject: ' + error.message);
@@ -934,7 +1310,6 @@ useEffect(() => {
       .single();
 
     if (data?.status === "active") {
-      console.log("Game became active - joiner joined!");
       clearInterval(interval);
       setMultiplayerActive(true);
       setSeatedRole((prev) => prev ?? "student");
@@ -953,10 +1328,7 @@ useEffect(() => {
 
   // Subscribe to channel
   ch.subscribe((status) => {
-    console.log('Channel status:', status);
-    
     if (status === 'SUBSCRIBED') {
-      console.log('Successfully subscribed to game channel');
       
       // Track if we've sent our info (to avoid infinite loop)
       let sentMyInfo = false;
@@ -967,7 +1339,6 @@ useEffect(() => {
         if (payload.sender === (sbUser?.id ?? (isHost ? 'host' : 'joiner'))) return;
         
         if (payload.event === "PLAYER_INFO") {
-          console.log("Received PLAYER_INFO:", payload.name);
           setOpponentName(payload.name || null);
           
           // Reply with our own info if we haven't yet (ensures both sides get names)
@@ -987,13 +1358,11 @@ useEffect(() => {
         
         // Handle play again request from opponent
         if (payload.event === "PLAY_AGAIN_REQUEST") {
-          console.log("Received PLAY_AGAIN_REQUEST from opponent");
           setOpponentWantsPlayAgain(true);
         }
         
         // Handle play again accept - opponent accepted our request
         if (payload.event === "PLAY_AGAIN_ACCEPT") {
-          console.log("Received PLAY_AGAIN_ACCEPT from opponent");
           setPlayAgainRequested(false);
           setOpponentWantsPlayAgain(false);
           setHandLogHistory([]);
@@ -1164,7 +1533,7 @@ useEffect(() => {
   
   async function fetchProfiles() {
     const { data: students } = await supabase
-      .from('profiles')
+      .from('public_profiles')
       .select('*')
       .eq('role', 'student')
       .neq('id', sbUser!.id)
@@ -1172,7 +1541,7 @@ useEffect(() => {
       .limit(50);
     
     const { data: professionals } = await supabase
-      .from('profiles')
+      .from('public_profiles')
       .select('*')
       .eq('role', 'professional')
       .neq('id', sbUser!.id)
@@ -1241,7 +1610,8 @@ useEffect(() => {
   async function checkForActiveGame() {
     try {
       const savedGameId = sessionStorage.getItem('headsup_gameId');
-      const savedSeat = sessionStorage.getItem('headsup_mySeat') as Seat | null;
+      const savedSeatRaw = sessionStorage.getItem('headsup_mySeat');
+      const savedSeat: Seat | null = (savedSeatRaw === 'top' || savedSeatRaw === 'bottom') ? savedSeatRaw : null;
       const savedPin = sessionStorage.getItem('headsup_gamePin');
       const savedStateJson = sessionStorage.getItem('headsup_hostState');
       
@@ -1250,8 +1620,6 @@ useEffect(() => {
         return;
       }
       
-      console.log('Found saved game session, attempting reconnect...');
-      
       const { data: gameRow, error } = await supabase
         .from('games')
         .select('id, pin, status')
@@ -1259,7 +1627,6 @@ useEffect(() => {
         .single();
       
       if (error || !gameRow) {
-        console.log('Game no longer exists, clearing session');
         sessionStorage.removeItem('headsup_gameId');
         sessionStorage.removeItem('headsup_mySeat');
         sessionStorage.removeItem('headsup_gamePin');
@@ -1269,8 +1636,6 @@ useEffect(() => {
         setIsReconnecting(false);
         return;
       }
-      
-      console.log('Game found, reconnecting...', gameRow);
       
       const savedDealerOffset = sessionStorage.getItem('headsup_dealerOffset');
       if (savedDealerOffset) {
@@ -1282,9 +1647,8 @@ useEffect(() => {
         try {
           const parsedState = JSON.parse(savedStateJson) as HostState;
           setSavedHostState(parsedState);
-          console.log('Restored host state from session');
         } catch (e) {
-          console.error('Failed to parse saved state:', e);
+          // Silently ignore parse errors
         }
       }
       
@@ -1294,9 +1658,8 @@ useEffect(() => {
         try {
           const parsedHistory = JSON.parse(savedHistoryJson);
           setHandLogHistory(parsedHistory);
-          console.log('Restored hand history from session');
         } catch (e) {
-          console.error('Failed to parse saved history:', e);
+          // Silently ignore parse errors
         }
       }
       
@@ -1311,7 +1674,6 @@ useEffect(() => {
       } else if (savedSeat === 'bottom') {
         setScreen('role');
       } else {
-        console.log('Joiner but game not active, clearing session');
         sessionStorage.removeItem('headsup_gameId');
         sessionStorage.removeItem('headsup_mySeat');
         sessionStorage.removeItem('headsup_gamePin');
@@ -1320,7 +1682,6 @@ useEffect(() => {
         sessionStorage.removeItem('headsup_handHistory');
       }
     } catch (e) {
-      console.error('Reconnection check failed:', e);
     } finally {
       setIsReconnecting(false);
     }
@@ -1378,10 +1739,6 @@ const oppStack = displayGame.stacks[oppActualSeat];
 const oppBet = displayGame.bets[oppActualSeat];
   
   const amIDealer = dealerSeat === myActualSeat;
-console.log('DEBUG - handId:', handId, 'dealerOffset:', dealerOffset, 'dealerSeat:', dealerSeat);
-console.log('DEBUG - myActualSeat:', myActualSeat, 'oppActualSeat:', oppActualSeat, 'amIDealer:', amIDealer);
-console.log('DEBUG - game.bets:', game.bets, 'myBet:', myBet, 'oppBet:', oppBet);
-console.log('DEBUG - toAct:', toAct, 'mySeat:', mySeat, 'myTurn:', toAct === mySeat, 'isBottomTurn:', toAct === mySeat && handResult.status === "playing");
   const myPositionLabel = amIDealer ? "SB/D" : "BB";
   const oppPositionLabel = amIDealer ? "BB" : "SB/D";
   
@@ -1402,32 +1759,39 @@ console.log('DEBUG - toAct:', toAct, 'mySeat:', mySeat, 'myTurn:', toAct === myS
 }
 
 async function createPinGame() {
-  const startTime = performance.now();
-  console.log("=== CREATE GAME START ===");
   let user: User;
+
+  // Get user first for rate limiting
+  const { data: existingData } = await supabase.auth.getUser();
+  if (existingData?.user) {
+    const { data: allowed } = await supabase.rpc('check_rate_limit', {
+      p_user_id: existingData.user.id,
+      p_action_type: 'game_create',
+      p_max_attempts: 10,
+      p_window_seconds: 3600
+    });
+    if (!allowed) {
+      alert('Too many games created. Please wait before creating another.');
+      setCreatingGame(false);
+      return;
+    }
+  }
 
   // Try to use existing session first (much faster)
   try {
-    console.log("Step 1: Checking for existing user...");
     const { data: existingData } = await supabase.auth.getUser();
     
     if (existingData?.user) {
       user = existingData.user;
-      console.log("Using existing user:", user.id);
     } else {
       // Only create anonymous user if needed
-      console.log("Creating new anonymous user...");
-      const authStart = performance.now();
       const { data: anonData, error: anonErr } =
         await supabase.auth.signInAnonymously();
-      console.log(`signInAnonymously took ${(performance.now() - authStart).toFixed(0)}ms`);
       
       if (anonErr || !anonData.user) throw anonErr;
       user = anonData.user;
-      console.log("Anonymous user created:", user.id);
     }
   } catch (e) {
-    console.error("Auth failed:", e);
     alert("Could not start a guest session.");
     setCreatingGame(false);
     return;
@@ -1436,10 +1800,7 @@ async function createPinGame() {
   // attempt to create a unique 4-digit PIN
   for (let attempt = 0; attempt < 5; attempt++) {
     const pin = generate4DigitPin();
-    console.log(`\nAttempt ${attempt + 1}: Trying PIN ${pin}`);
 
-    console.log("Step 2: Inserting game...");
-    const insertStart = performance.now();
     const { data: gameRow, error: gameErr } = await supabase
       .from("games")
       .insert({
@@ -1449,13 +1810,10 @@ async function createPinGame() {
       })
       .select("id,pin")
       .single();
-    console.log(`games.insert took ${(performance.now() - insertStart).toFixed(0)}ms`);
 
     if (gameErr) {
-      console.error("games.insert failed:", gameErr);
       // If it's a PIN collision (unique constraint violation), try again
       if (gameErr.code === "23505") {
-        console.log("PIN collision, trying new PIN...");
         continue;
       }
       // For other errors, fail immediately
@@ -1465,12 +1823,9 @@ async function createPinGame() {
     }
 
     if (!gameRow) {
-      console.error("No game row returned");
       continue;
     }
 
-    console.log("Step 3: Claiming seat...");
-    const playerStart = performance.now();
     const { error: playerErr } = await supabase
       .from("game_players")
       .insert({
@@ -1478,18 +1833,12 @@ async function createPinGame() {
         user_id: user.id,
         seat: "bottom",
       });
-    console.log(`game_players.insert took ${(performance.now() - playerStart).toFixed(0)}ms`);
 
     if (playerErr) {
-      console.error("game_players.insert failed:", playerErr);
       alert("Failed to claim seat.");
       setCreatingGame(false);
       return;
     }
-
-    const totalTime = (performance.now() - startTime).toFixed(0);
-    console.log(`=== GAME CREATED SUCCESSFULLY in ${totalTime}ms ===`);
-    console.log("PIN:", gameRow.pin);
 
     setJoinMode(false);
     setJoinPinInput("");
@@ -1513,7 +1862,6 @@ async function createPinGame() {
     return;
   }
 
-  console.error("Failed after 5 attempts");
   alert("Failed to create game (PIN collision). Please try again.");
   setCreatingGame(false);
 }
@@ -1531,64 +1879,65 @@ async function getOrCreateUser() {
 
 async function joinPinGame() {
   const pin = joinPinInput.trim();
-  if (pin.length !== 4) return;
+  
+  // === INPUT VALIDATION ===
+  const pinValidation = validateInput(pin, 'gamePin', { required: true });
+  if (!pinValidation.valid) {
+    alert(pinValidation.error);
+    return;
+  }
   
   // Prevent multiple simultaneous join attempts
   if (creatingGame) {
-    console.log("Already joining game, ignoring duplicate click");
     return;
   }
   
   setCreatingGame(true);
-  console.log("=== JOIN GAME START ===");
-  console.log("PIN:", pin);
   
   let user: User;
   try {
-    console.log("Creating anonymous user...");
-    const authStart = performance.now();
     const { data: anonData, error: anonErr } =
       await supabase.auth.signInAnonymously();
-    console.log(`signInAnonymously took ${(performance.now() - authStart).toFixed(0)}ms`);
     
     if (anonErr || !anonData.user) {
-      console.error("Anonymous auth error:", anonErr);
       throw anonErr;
     }
     user = anonData.user;
-    console.log("Anonymous user created:", user.id);
   } catch (e) {
-    console.error("joinPinGame auth failed:", e);
     alert("Network error: Could not connect to server. Please check your internet connection and try again.");
     setCreatingGame(false);
     return;
   }
+  
+  // Server-side rate limiting for PIN attempts
+  const { data: allowed, error: rateError } = await supabase
+    .rpc('check_rate_limit', {
+      p_user_id: user.id,
+      p_action_type: 'pin_join',
+      p_max_attempts: 5,
+      p_window_seconds: 60
+    });
+  
+  if (rateError || !allowed) {
+    alert('Too many PIN attempts. Please wait 1 minute.');
+    setPinLockoutUntil(Date.now() + 60000);
+    setCreatingGame(false);
+    return;
+  }
 
-  console.log("Looking up game with PIN:", pin);
   const { data: gameRow, error: gameErr } = await supabase
     .from("games")
     .select("id,pin,status")
     .eq("pin", pin)
     .single();
 
-  if (gameErr) {
-    console.error("Game lookup error:", gameErr);
-    alert("Could not find game with that PIN. Please check the PIN and try again.");
+  if (gameErr || !gameRow) {
+    alert('Invalid PIN. Please try again.');
     setCreatingGame(false);
     return;
   }
   
-  if (!gameRow) {
-    console.error("No game found with PIN:", pin);
-    alert("Game not found. Please check the PIN.");
-    setCreatingGame(false);
-    return;
-  }
-  
-  console.log("Found game:", gameRow.id);
-
   // join as top seat
-  console.log("Claiming seat in game...");
   const { error: playerErr } = await supabase.from("game_players").insert({
     game_id: gameRow.id,
     user_id: user.id,
@@ -1596,19 +1945,14 @@ async function joinPinGame() {
   });
 
   if (playerErr) {
-    console.error("Failed to claim seat:", playerErr);
     alert("Could not join game. The seat may already be taken.");
     setCreatingGame(false);
     return;
   }
   
-  console.log("Seat claimed, marking game as active...");
-
   // mark game as active
-  console.log("Marking game as active...");
   await supabase.from("games").update({ status: "active" }).eq("id", gameRow.id);
 
-  console.log("Join successful, entering game...");
   setJoinMode(false);
   setJoinPinInput("");
   setGamePin(gameRow.pin);
@@ -1774,7 +2118,6 @@ function applyRemoteReset(p: {
 
     // Don't add duplicate snapshots for the same hand
     if (prev.length > 0 && prev[0]?.handNo === snap.handNo) return prev;
-    console.log('Saving hand history snapshot:', snap.handNo + 1);
     return [snap, ...prev].slice(0, 30);
   });
 }
@@ -2065,10 +2408,8 @@ const youRaw2 = mySeat === "bottom" ? bottomRaw2 : topRaw2;
   
   // Debug: Check if joiner hasn't received state yet
   if (multiplayerActive && !isHost && !mpState) {
-    console.warn('JOINER: Waiting for initial state from host...');
   }
   if (multiplayerActive && !isHost && mpState && !mpState.cards) {
-    console.error('JOINER: Received state but cards are null!', mpState);
   }
 
   const heroHandRank = useMemo(() => {
@@ -2926,8 +3267,6 @@ useEffect(() => {
   if (!multiplayerActive || !mpState) return;
   if (mpState.handResult.status !== "ended") return;
   
-  console.log('CAPTURING SNAPSHOT for handId:', mpState.handId);
-  
   // Extract cards from perspective
   const myCards = mySeat === "bottom" 
     ? [displayCards?.[2], displayCards?.[3]]
@@ -3018,7 +3357,6 @@ useEffect(() => {
       const newActionCount = snap.log.length;
       
       if (newActionCount > prevActionCount) {
-        console.log('Updating hand history snapshot:', snap.handNo + 1, 'actions:', prevActionCount, '→', newActionCount);
         // Replace the first (most recent) snapshot with updated version that includes new actions
         const newHistory = [snap, ...prev.slice(1)];
         sessionStorage.setItem('headsup_handHistory', JSON.stringify(newHistory));
@@ -3027,7 +3365,6 @@ useEffect(() => {
       // No change in action count, don't update
       return prev;
     }
-    console.log('Saving hand history snapshot:', snap.handNo + 1);
     const newHistory = [snap, ...prev].slice(0, 30);
     sessionStorage.setItem('headsup_handHistory', JSON.stringify(newHistory));
     return newHistory;
@@ -3068,7 +3405,6 @@ useEffect(() => {
     setHandLogHistory((prev: HandLogSnapshot[]) => {
       // Don't add duplicate snapshots for the same hand
 if (prev.length > 0 && prev[0]?.handNo === snap.handNo) return prev;
-console.log('Saving hand history snapshot:', snap.handNo + 1);
 return [snap, ...prev].slice(0, 30);
     });
   } else if (!multiplayerActive) {
@@ -3290,10 +3626,7 @@ useEffect(() => {
       .eq('recipient_id', sbUser!.id)
       .select();
     
-    console.log('Mark as read result:', { updateData, updateError });
-    
     if (updateError) {
-      console.error('Failed to mark messages as read:', updateError);
     }
     
     // Clear unread count for this user immediately in UI
@@ -3363,19 +3696,44 @@ useEffect(() => {
 }, [sbUser?.id, selectedChatUser?.id, screen]);
 
 async function sendMessage() {
-  if (!sbUser?.id || !selectedChatUser || !messageInput.trim()) return;
+  if (!sbUser?.id || !selectedChatUser) return;
+  
+  // === INPUT VALIDATION ===
+  const messageValidation = validateMessage(messageInput);
+  if (!messageValidation.valid) {
+    alert(messageValidation.error);
+    return;
+  }
+  
+  // Server-side rate limiting via RPC
+  const { data: allowed, error: rateError } = await supabase
+    .rpc('check_rate_limit', {
+      p_user_id: sbUser.id,
+      p_action_type: 'message_send',
+      p_max_attempts: 30,
+      p_window_seconds: 60
+    });
+  
+  if (rateError || !allowed) {
+    alert('Too many messages. Please wait a moment.');
+    return;
+  }
   
   const { error } = await supabase
     .from('messages')
     .insert({
       sender_id: sbUser.id,
       recipient_id: selectedChatUser.id,
-      text: messageInput.trim(),
+      text: messageValidation.sanitized,
       read: false,
     });
   
   if (error) {
-    alert('Failed to send message: ' + error.message);
+    if (error.code === '42501') {
+      alert('You can only message your connections.');
+    } else {
+      alert('Failed to send message. Please try again.');
+    }
     return;
   }
   
@@ -3838,52 +4196,111 @@ if (screen === "studentProfile") {
   type="button"
   disabled={!seatedRole || !studentProfile.email || !studentProfile.password || !studentProfile.firstName || !studentProfile.lastName}
   onClick={async () => {
+    // Server-side rate limiting
+    const { data: { user: tempUser } } = await supabase.auth.getUser();
+    if (tempUser) {
+      const { data: allowed } = await supabase.rpc('check_rate_limit', {
+        p_user_id: tempUser.id,
+        p_action_type: 'signup',
+        p_max_attempts: 3,
+        p_window_seconds: 60
+      });
+      if (!allowed) {
+        alert('Too many signup attempts. Please wait a minute.');
+        return;
+      }
+    }
+    
+    // === EMAIL VALIDATION ===
+    const emailValidation = validateEmail(studentProfile.email);
+    if (!emailValidation.valid) {
+      alert(emailValidation.error);
+      recordRateLimitAttempt('SIGNUP');
+      return;
+    }
+    
+    // === PASSWORD VALIDATION ===
+    const passwordValidation = validatePassword(studentProfile.password);
+    if (!passwordValidation.valid) {
+      alert(passwordValidation.errors[0]);
+      recordRateLimitAttempt('SIGNUP');
+      return;
+    }
+    
+    // === PROFILE VALIDATION (schema-based, rejects unexpected fields) ===
+    const profileValidation = validateProfileData({
+      firstName: studentProfile.firstName,
+      lastName: studentProfile.lastName,
+      email: studentProfile.email,
+      year: studentProfile.year,
+      major: studentProfile.major,
+      school: studentProfile.school,
+      company: studentProfile.company,
+      workTitle: studentProfile.workTitle,
+      linkedinUrl: studentProfile.linkedinUrl,
+    });
+    
+    if (!profileValidation.valid) {
+      const firstError = Object.values(profileValidation.errors)[0];
+      alert(firstError || 'Please check your input');
+      recordRateLimitAttempt('SIGNUP');
+      return;
+    }
+    
+    // Record attempt before API call
+    recordRateLimitAttempt('SIGNUP');
+    
     try {
+      const sanitizedProfile = profileValidation.sanitized;
+      
       // Create auth user
       const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: studentProfile.email,
+        email: emailValidation.sanitized,
         password: studentProfile.password,
       });
       
       if (authError) {
-        alert('Sign up failed: ' + authError.message);
+        // Generic error to prevent email enumeration
+        alert('Sign up failed. Please check your information and try again.');
         return;
       }
       
       if (!authData.user) {
-        alert('Sign up failed: No user returned');
+        alert('Sign up failed. Please try again.');
         return;
       }
       
-      // Create profile
+      // Create profile with sanitized inputs
       const { error: profileError } = await supabase
         .from('profiles')
         .insert({
           id: authData.user.id,
-          email: studentProfile.email,
-          first_name: studentProfile.firstName,
-          last_name: studentProfile.lastName,
+          email: emailValidation.sanitized,
+          first_name: sanitizedProfile.firstName,
+          last_name: sanitizedProfile.lastName,
           role: seatedRole,
-          year: seatedRole === 'student' ? studentProfile.year : null,
-          major: seatedRole === 'student' ? studentProfile.major : null,
-          school: studentProfile.school || null,
-          company: seatedRole === 'professional' ? studentProfile.company : null,
-          work_title: seatedRole === 'professional' ? studentProfile.workTitle : null,
-          linkedin_url: studentProfile.linkedinUrl || null,
+          year: seatedRole === 'student' ? sanitizedProfile.year : null,
+          major: seatedRole === 'student' ? sanitizedProfile.major : null,
+          school: sanitizedProfile.school || null,
+          company: seatedRole === 'professional' ? sanitizedProfile.company : null,
+          work_title: seatedRole === 'professional' ? sanitizedProfile.workTitle : null,
+          linkedin_url: sanitizedProfile.linkedinUrl || null,
         });
       
       if (profileError) {
-        alert('Profile creation failed: ' + profileError.message);
+        alert('Profile creation failed. Please try again.');
         return;
       }
       
+      // Success - reset rate limit
+      resetRateLimit('SIGNUP');
       alert('Account created! Please check your email to verify.');
       setScreen("role");
     } catch (e) {
-      console.error('Sign up error:', e);
       alert('Sign up failed. Please try again.');
     }
   }}
+
   className={`mt-4 rounded-2xl border px-4 py-3 text-sm font-semibold transition-colors ${
     seatedRole && studentProfile.email && studentProfile.password && studentProfile.firstName && studentProfile.lastName ? "hover:bg-gray-50" : "opacity-50 cursor-not-allowed"
   }`}
@@ -3945,19 +4362,32 @@ if (screen === "studentLogin") {
             id="login-button"
             disabled={!loginEmail || !loginPassword}
             onClick={async () => {
+              
+              // === INPUT VALIDATION ===
+              const emailValidation = validateEmail(loginEmail);
+              if (!emailValidation.valid) {
+                alert(emailValidation.error);
+                return;
+              }
+              
+              if (!loginPassword || loginPassword.length < 1) {
+                alert('Please enter your password');
+                return;
+              }
+              
               try {
                 const { data, error } = await supabase.auth.signInWithPassword({
-                  email: loginEmail,
+                  email: emailValidation.sanitized,
                   password: loginPassword,
                 });
                 
                 if (error) {
-                  alert('Login failed: ' + error.message);
+                  alert('Invalid email or password');
                   return;
                 }
                 
                 if (!data.user) {
-                  alert('Login failed: No user returned');
+                  alert('Login failed. Please try again.');
                   return;
                 }
                 
@@ -3991,7 +4421,6 @@ if (screen === "studentLogin") {
                 setLoginPassword('');
                 setScreen("role");
               } catch (e) {
-                console.error('Login error:', e);
                 alert('Login failed. Please try again.');
               }
             }}
@@ -4808,24 +5237,45 @@ if (screen === "editProfile") {
   const handleSaveProfile = async () => {
     if (!sbUser?.id) return;
     
+    // === PROFILE VALIDATION (schema-based) ===
+    const profileValidation = validateProfileData({
+      firstName: studentProfile.firstName,
+      lastName: studentProfile.lastName,
+      email: studentProfile.email,
+      year: studentProfile.year,
+      major: studentProfile.major,
+      school: studentProfile.school,
+      company: studentProfile.company,
+      workTitle: studentProfile.workTitle,
+      linkedinUrl: studentProfile.linkedinUrl,
+    });
+    
+    if (!profileValidation.valid) {
+      const firstError = Object.values(profileValidation.errors)[0];
+      alert(firstError || 'Please check your input');
+      return;
+    }
+    
+    const sanitizedProfile = profileValidation.sanitized;
+    
     setSavingProfile(true);
     try {
       const { error } = await supabase
         .from('profiles')
         .update({
-          first_name: studentProfile.firstName,
-          last_name: studentProfile.lastName,
-          year: seatedRole === 'student' ? studentProfile.year : null,
-          major: seatedRole === 'student' ? studentProfile.major : null,
-          school: studentProfile.school || null,
-          company: seatedRole === 'professional' ? studentProfile.company : null,
-          work_title: seatedRole === 'professional' ? studentProfile.workTitle : null,
-          linkedin_url: studentProfile.linkedinUrl || null,
+          first_name: sanitizedProfile.firstName,
+          last_name: sanitizedProfile.lastName,
+          year: seatedRole === 'student' ? sanitizedProfile.year : null,
+          major: seatedRole === 'student' ? sanitizedProfile.major : null,
+          school: sanitizedProfile.school || null,
+          company: seatedRole === 'professional' ? sanitizedProfile.company : null,
+          work_title: seatedRole === 'professional' ? sanitizedProfile.workTitle : null,
+          linkedin_url: sanitizedProfile.linkedinUrl || null,
         })
         .eq('id', sbUser.id);
       
       if (error) {
-        alert('Failed to save: ' + error.message);
+        alert('Failed to save. Please try again.');
       } else {
         alert('Profile updated!');
         setScreen(seatedRole === 'professional' ? 'professionalDashboard' : 'dashboard');
@@ -5035,7 +5485,6 @@ const oppPosLabel = viewingSnapshot
     : displayHandStartStacks[oppActualSeat];
 
 const displayedActionLog = viewingSnapshot ? viewingSnapshot.log : displayActionLog;
-console.log('UI displayedActionLog:', displayedActionLog);
 
 const displayedHistoryBoard = viewingSnapshot
   ? viewingSnapshot.endedBoard
