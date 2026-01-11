@@ -1170,29 +1170,27 @@ const [lastMessages, setLastMessages] = useState<Map<string, { text: string; cre
 async function sendConnectionRequest(recipientId: string, recipientName: string) {
   if (!sbUser?.id) return;
   
-  // === INPUT VALIDATION ===
-  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (!uuidPattern.test(recipientId)) {
-    alert('Invalid user');
-    return;
-  }
-  
-  if (recipientId === sbUser.id) {
-    alert('You cannot connect with yourself');
-    return;
-  }
-  
-  // Server-side rate limiting via RPC
-  const { data: allowed, error: rateError } = await supabase
-    .rpc('check_rate_limit', {
+  // === SERVER-SIDE RATE LIMITING ===
+  try {
+    const { data: allowed, error: rlError } = await supabase.rpc('check_rate_limit', {
       p_user_id: sbUser.id,
       p_action_type: 'connection_request',
       p_max_attempts: 20,
       p_window_seconds: 3600
     });
+    
+    if (rlError) {
+      console.error('Rate limit check failed:', rlError);
+    } else if (allowed === false) {
+      alert('Too many connection requests. Please wait before sending more.');
+      return;
+    }
+  } catch (e) {
+    console.error('Rate limit error:', e);
+  }
   
-  if (rateError || !allowed) {
-    alert('Too many connection requests. Please wait before sending more.');
+  if (recipientId === sbUser.id) {
+    alert('You cannot connect with yourself');
     return;
   }
   
@@ -1761,22 +1759,6 @@ const oppBet = displayGame.bets[oppActualSeat];
 async function createPinGame() {
   let user: User;
 
-  // Get user first for rate limiting
-  const { data: existingData } = await supabase.auth.getUser();
-  if (existingData?.user) {
-    const { data: allowed } = await supabase.rpc('check_rate_limit', {
-      p_user_id: existingData.user.id,
-      p_action_type: 'game_create',
-      p_max_attempts: 10,
-      p_window_seconds: 3600
-    });
-    if (!allowed) {
-      alert('Too many games created. Please wait before creating another.');
-      setCreatingGame(false);
-      return;
-    }
-  }
-
   // Try to use existing session first (much faster)
   try {
     const { data: existingData } = await supabase.auth.getUser();
@@ -1795,6 +1777,28 @@ async function createPinGame() {
     alert("Could not start a guest session.");
     setCreatingGame(false);
     return;
+  }
+
+  // Rate limit check (AFTER user is authenticated)
+  try {
+    const { data: allowed, error: rlError } = await supabase.rpc('check_rate_limit', {
+      p_user_id: user.id,
+      p_action_type: 'game_create',
+      p_max_attempts: 10,
+      p_window_seconds: 3600
+    });
+    
+    if (rlError) {
+      console.error('Rate limit check failed:', rlError);
+      // Continue anyway - don't block game creation if rate limiting fails
+    } else if (allowed === false) {
+      alert('Too many games created. Please wait an hour before creating another.');
+      setCreatingGame(false);
+      return;
+    }
+  } catch (e) {
+    console.error('Rate limit error:', e);
+    // Continue anyway
   }
 
   // attempt to create a unique 4-digit PIN
@@ -1909,20 +1913,24 @@ async function joinPinGame() {
     return;
   }
   
-  // Server-side rate limiting for PIN attempts
-  const { data: allowed, error: rateError } = await supabase
-    .rpc('check_rate_limit', {
+  // === SERVER-SIDE RATE LIMITING (after auth) ===
+  try {
+    const { data: allowed, error: rlError } = await supabase.rpc('check_rate_limit', {
       p_user_id: user.id,
       p_action_type: 'pin_join',
       p_max_attempts: 5,
       p_window_seconds: 60
     });
-  
-  if (rateError || !allowed) {
-    alert('Too many PIN attempts. Please wait 1 minute.');
-    setPinLockoutUntil(Date.now() + 60000);
-    setCreatingGame(false);
-    return;
+    
+    if (rlError) {
+      console.error('Rate limit check failed:', rlError);
+    } else if (allowed === false) {
+      alert('Too many attempts. Please wait a minute before trying again.');
+      setCreatingGame(false);
+      return;
+    }
+  } catch (e) {
+    console.error('Rate limit error:', e);
   }
 
   const { data: gameRow, error: gameErr } = await supabase
@@ -3705,18 +3713,23 @@ async function sendMessage() {
     return;
   }
   
-  // Server-side rate limiting via RPC
-  const { data: allowed, error: rateError } = await supabase
-    .rpc('check_rate_limit', {
+  // === SERVER-SIDE RATE LIMITING ===
+  try {
+    const { data: allowed, error: rlError } = await supabase.rpc('check_rate_limit', {
       p_user_id: sbUser.id,
       p_action_type: 'message_send',
       p_max_attempts: 30,
       p_window_seconds: 60
     });
-  
-  if (rateError || !allowed) {
-    alert('Too many messages. Please wait a moment.');
-    return;
+    
+    if (rlError) {
+      console.error('Rate limit check failed:', rlError);
+    } else if (allowed === false) {
+      alert('Sending too fast. Please slow down.');
+      return;
+    }
+  } catch (e) {
+    console.error('Rate limit error:', e);
   }
   
   const { error } = await supabase
