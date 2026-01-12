@@ -1276,6 +1276,7 @@ async function rejectConnection(odId: string, connectionId: string) {
 }
 
 const [savingProfile, setSavingProfile] = useState(false);
+const [creatingAccount, setCreatingAccount] = useState(false);
 
   // timers
   const opponentTimerRef = useRef<number | null>(null);
@@ -4125,8 +4126,11 @@ if (screen === "studentProfile") {
 <div className="mb-6 flex gap-3">
   <button
   type="button"
+  disabled={creatingAccount}
   onClick={() => setSeatedRole("student")}
-  className={`flex-1 rounded-2xl border px-4 py-3 text-sm font-semibold transition-colors hover:bg-gray-50 ${
+  className={`flex-1 rounded-2xl border px-4 py-3 text-sm font-semibold transition-colors ${
+    creatingAccount ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-50"
+  } ${
     seatedRole === "student" ? "border-white bg-white/10" : ""
   }`}
 >
@@ -4135,8 +4139,11 @@ if (screen === "studentProfile") {
 
   <button
   type="button"
+  disabled={creatingAccount}
   onClick={() => setSeatedRole("professional")}
-  className={`flex-1 rounded-2xl border px-4 py-3 text-sm font-semibold transition-colors hover:bg-gray-50 ${
+  className={`flex-1 rounded-2xl border px-4 py-3 text-sm font-semibold transition-colors ${
+    creatingAccount ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-50"
+  } ${
     seatedRole === "professional" ? "border-white bg-white/10" : ""
   }`}
 >
@@ -4287,15 +4294,18 @@ if (screen === "studentProfile") {
   </>
 )}
 
-          <button
+         <button
   type="button"
-  disabled={!seatedRole || !studentProfile.email || !studentProfile.password || !studentProfile.firstName || !studentProfile.lastName}
+  disabled={creatingAccount || !seatedRole || !studentProfile.email || !studentProfile.password || !studentProfile.firstName || !studentProfile.lastName}
   onClick={async () => {
+    setCreatingAccount(true);
+    
     // === EMAIL VALIDATION ===
     const emailValidation = validateEmail(studentProfile.email);
     if (!emailValidation.valid) {
       alert(emailValidation.error);
       recordRateLimitAttempt('SIGNUP');
+      setCreatingAccount(false);
       return;
     }
     
@@ -4304,6 +4314,7 @@ if (screen === "studentProfile") {
     if (!passwordValidation.valid) {
       alert(passwordValidation.errors[0]);
       recordRateLimitAttempt('SIGNUP');
+      setCreatingAccount(false);
       return;
     }
     
@@ -4324,13 +4335,14 @@ if (screen === "studentProfile") {
       const firstError = Object.values(profileValidation.errors)[0];
       alert(firstError || 'Please check your input');
       recordRateLimitAttempt('SIGNUP');
+      setCreatingAccount(false);
       return;
     }
     
     // Record attempt before API call
     recordRateLimitAttempt('SIGNUP');
     
-   try {
+    try {
       const sanitizedProfile = profileValidation.sanitized;
       
       // Create auth user (no email verification required)
@@ -4341,11 +4353,13 @@ if (screen === "studentProfile") {
       
       if (authError) {
         alert('Sign up failed: ' + authError.message);
+        setCreatingAccount(false);
         return;
       }
       
       if (!authData.user) {
         alert('Sign up failed. Please try again.');
+        setCreatingAccount(false);
         return;
       }
       
@@ -4366,8 +4380,9 @@ if (screen === "studentProfile") {
           linkedin_url: sanitizedProfile.linkedinUrl || null,
         });
       
-                  if (profileError) {
+      if (profileError) {
         alert('Profile creation failed. Please try again.');
+        setCreatingAccount(false);
         return;
       }
 
@@ -4375,7 +4390,6 @@ if (screen === "studentProfile") {
       
       // Success - reset rate limit and update state
       resetRateLimit('SIGNUP');
-
 
       // Keep user signed in with their profile info
       setStudentProfile({
@@ -4396,18 +4410,21 @@ if (screen === "studentProfile") {
       
     } catch (e) {
       alert('Sign up failed. Please try again.');
+    } finally {
+      setCreatingAccount(false);
     }
   }}
 
   className={`mt-4 rounded-2xl border px-4 py-3 text-sm font-semibold transition-colors ${
-    seatedRole && studentProfile.email && studentProfile.password && studentProfile.firstName && studentProfile.lastName ? "hover:bg-gray-50" : "opacity-50 cursor-not-allowed"
+    !creatingAccount && seatedRole && studentProfile.email && studentProfile.password && studentProfile.firstName && studentProfile.lastName ? "hover:bg-gray-50" : "opacity-50 cursor-not-allowed"
   }`}
 >
-  Continue
+  {creatingAccount ? "Creating account..." : "Continue"}
 </button>
 
           <button
             type="button"
+            disabled={creatingAccount}
             onClick={() => {
               setStudentProfile({
                 firstName: "",
@@ -4424,7 +4441,7 @@ if (screen === "studentProfile") {
               setSeatedRole(null);
               setScreen("role");
             }}
-            className="rounded-2xl border px-4 py-3 text-sm font-semibold transition-colors hover:bg-gray-50"
+            className={`rounded-2xl border px-4 py-3 text-sm font-semibold transition-colors ${creatingAccount ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-50"}`}
           >
             Go back
           </button>
@@ -5434,6 +5451,19 @@ if (screen === "editProfile") {
       if (error) {
         alert('Failed to save. Please try again.');
       } else {
+        // Update local state with the saved values
+        setStudentProfile({
+          ...studentProfile,
+          firstName: toTitleCase(sanitizedProfile.firstName),
+          lastName: toTitleCase(sanitizedProfile.lastName),
+          year: seatedRole === 'student' ? sanitizedProfile.year : '',
+          major: seatedRole === 'student' ? toTitleCase(sanitizedProfile.major) : '',
+          school: sanitizedProfile.school || '',
+          company: seatedRole === 'professional' ? sanitizedProfile.company : '',
+          workTitle: seatedRole === 'professional' ? sanitizedProfile.workTitle : '',
+          linkedinUrl: sanitizedProfile.linkedinUrl || '',
+        });
+        
         alert('Profile updated!');
         setScreen(seatedRole === 'professional' ? 'professionalDashboard' : 'dashboard');
       }
