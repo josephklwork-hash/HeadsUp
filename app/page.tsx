@@ -1068,6 +1068,7 @@ const setStreetBettor = (next: any) =>
   const [joinMode, setJoinMode] = useState(false);
   const [joinPinInput, setJoinPinInput] = useState("");
   const [creatingGame, setCreatingGame] = useState(false);
+  const [creatingAccount, setCreatingAccount] = useState(false);
   const [pinLockoutUntil, setPinLockoutUntil] = useState<number | null>(null);
   const [isCreatingPin, setIsCreatingPin] = useState(false);
 
@@ -1276,7 +1277,6 @@ async function rejectConnection(odId: string, connectionId: string) {
 }
 
 const [savingProfile, setSavingProfile] = useState(false);
-const [creatingAccount, setCreatingAccount] = useState(false);
 
   // timers
   const opponentTimerRef = useRef<number | null>(null);
