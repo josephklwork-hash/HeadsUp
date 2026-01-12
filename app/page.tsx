@@ -3869,7 +3869,7 @@ if (isReconnecting) {
 if (screen === "role") {
 
   const baseButton =
-    "w-full rounded-3xl border px-6 font-semibold transition-colors duration-200 hover:bg-gray-50 hover:border-gray-300";
+    "w-full rounded-3xl border border-white text-white px-6 font-semibold transition-colors duration-200 hover:bg-gray-50 hover:border-gray-300 hover:text-black";
 
   const titleBusy = creatingGame || isCreatingPin;
   const disabledLinkClass = "opacity-40 cursor-not-allowed pointer-events-none";
@@ -4019,7 +4019,7 @@ const joinGame = () => {
 </div>
 
       <div className="w-full max-w-xl min-[1536px]:max-[1650px]:max-w-[450px] flex flex-col">
-        <h1 className="h-[44px] min-[1536px]:max-[1650px]:h-[34px] mb-8 min-[1536px]:max-[1650px]:mb-6 text-center text-3xl min-[1536px]:max-[1650px]:text-2xl font-bold leading-[44px] min-[1536px]:max-[1650px]:leading-[34px]">
+        <h1 className="h-[44px] min-[1536px]:max-[1650px]:h-[34px] mb-8 min-[1536px]:max-[1650px]:mb-6 text-center text-3xl min-[1536px]:max-[1650px]:text-2xl font-bold leading-[44px] min-[1536px]:max-[1650px]:leading-[34px] text-white">
           HeadsUp
         </h1>
 
@@ -4028,7 +4028,7 @@ const joinGame = () => {
     {/* CREATE GAME PIN VIEW */}
 {gamePin && !joinMode && (
   <div className="flex flex-col items-center gap-6">
-    <div className="text-lg min-[1536px]:max-[1650px]:text-sm font-semibold tabular-nums">
+    <div className="text-lg min-[1536px]:max-[1650px]:text-sm font-semibold tabular-nums text-white">
       Game PIN: <span className="font-bold">{gamePin}</span>
     </div>
 
@@ -4058,7 +4058,7 @@ const joinGame = () => {
           }
         }}
         placeholder="Enter Game PIN"
-        className="w-full max-w-xs min-[1536px]:max-[1650px]:max-w-[224px] rounded-xl min-[1536px]:max-[1650px]:rounded-lg border px-4 py-3 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-2 text-center text-lg min-[1536px]:max-[1650px]:text-sm tracking-widest tabular-nums"
+        className="w-full max-w-xs min-[1536px]:max-[1650px]:max-w-[224px] rounded-xl min-[1536px]:max-[1650px]:rounded-lg border border-white px-4 py-3 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-2 text-center text-lg min-[1536px]:max-[1650px]:text-sm tracking-widest tabular-nums text-white placeholder:text-white/50 bg-transparent"
       />
 
       <button
@@ -4130,7 +4130,7 @@ if (screen === "studentProfile") {
   return (
     <main className="relative flex min-h-screen items-center justify-center bg-black px-6 min-[1536px]:max-[1650px]:scale-[0.85] min-[1536px]:max-[1650px]:origin-center">
       <div className="w-full max-w-md">
-        <h1 className="mb-6 text-center text-3xl font-bold">Sign up</h1>
+        <h1 className="mb-6 text-center text-3xl font-bold text-white">Sign up</h1>
 
 <fieldset disabled={creatingAccount} className={creatingAccount ? "opacity-50" : ""}>
 <div className="mb-6 flex gap-3">
@@ -4138,8 +4138,8 @@ if (screen === "studentProfile") {
   type="button"
   disabled={creatingAccount}
   onClick={() => setSeatedRole("student")}
-  className={`flex-1 rounded-2xl border px-4 py-3 text-sm font-semibold transition-colors ${
-    creatingAccount ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-50"
+  className={`flex-1 rounded-2xl border border-white text-white px-4 py-3 text-sm font-semibold transition-colors ${
+    creatingAccount ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-50 hover:text-black"
   } ${
     seatedRole === "student" ? "border-white bg-white/10" : ""
   }`}
@@ -4151,8 +4151,8 @@ if (screen === "studentProfile") {
   type="button"
   disabled={creatingAccount}
   onClick={() => setSeatedRole("professional")}
-  className={`flex-1 rounded-2xl border px-4 py-3 text-sm font-semibold transition-colors ${
-    creatingAccount ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-50"
+  className={`flex-1 rounded-2xl border border-white text-white px-4 py-3 text-sm font-semibold transition-colors ${
+    creatingAccount ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-50 hover:text-black"
   } ${
     seatedRole === "professional" ? "border-white bg-white/10" : ""
   }`}
@@ -4169,7 +4169,7 @@ if (screen === "studentProfile") {
             onChange={(e) =>
               setStudentProfile({ ...studentProfile, firstName: e.target.value })
             }
-            className="rounded-xl border px-4 py-3 text-sm"
+            className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
           />
 
           <input
@@ -4179,7 +4179,7 @@ if (screen === "studentProfile") {
             onChange={(e) =>
               setStudentProfile({ ...studentProfile, lastName: e.target.value })
             }
-            className="rounded-xl border px-4 py-3 text-sm"
+            className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
           />
 
           <input
@@ -4189,7 +4189,7 @@ if (screen === "studentProfile") {
   onChange={(e) =>
     setStudentProfile({ ...studentProfile, email: e.target.value })
   }
-  className="rounded-xl border px-4 py-3 text-sm"
+  className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
 />
 
 <div className="relative">
@@ -4200,12 +4200,12 @@ if (screen === "studentProfile") {
     onChange={(e) =>
       setStudentProfile({ ...studentProfile, password: e.target.value })
     }
-    className="w-full rounded-xl border px-4 py-3 text-sm pr-12"
+    className="w-full rounded-xl border border-white px-4 py-3 text-sm pr-12 text-white placeholder:text-white/50 bg-transparent"
   />
   <button
     type="button"
     onClick={() => setShowPassword(!showPassword)}
-    className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-gray-500 hover:text-gray-700"
+    className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-white/60 hover:text-white"
   >
     {showPassword ? "Hide" : "Show"}
   </button>
@@ -4220,7 +4220,7 @@ if (screen === "studentProfile") {
       onChange={(e) =>
         setStudentProfile({ ...studentProfile, school: e.target.value })
       }
-      className="rounded-xl border px-4 py-3 text-sm"
+      className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
     />
 
     <input
@@ -4230,7 +4230,7 @@ if (screen === "studentProfile") {
       onChange={(e) =>
         setStudentProfile({ ...studentProfile, linkedinUrl: e.target.value })
       }
-      className="rounded-xl border px-4 py-3 text-sm"
+      className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
     />
 
     <select
@@ -4238,7 +4238,7 @@ if (screen === "studentProfile") {
       onChange={(e) =>
         setStudentProfile({ ...studentProfile, year: e.target.value })
       }
-      className="w-full rounded-xl border px-4 py-3 text-sm appearance-none bg-transparent text-white cursor-pointer"
+      className="w-full rounded-xl border border-white px-4 py-3 text-sm appearance-none bg-transparent text-white cursor-pointer"
     >
       <option value="" disabled className="bg-black text-white">Year</option>
       <option value="1" className="bg-black text-white">1</option>
@@ -4255,7 +4255,7 @@ if (screen === "studentProfile") {
       onChange={(e) =>
         setStudentProfile({ ...studentProfile, major: e.target.value })
       }
-      className="rounded-xl border px-4 py-3 text-sm"
+      className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
     />
   </>
 )}
@@ -4269,7 +4269,7 @@ if (screen === "studentProfile") {
       onChange={(e) =>
         setStudentProfile({ ...studentProfile, company: e.target.value })
       }
-      className="rounded-xl border px-4 py-3 text-sm"
+      className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
     />
 
     <input
@@ -4279,7 +4279,7 @@ if (screen === "studentProfile") {
       onChange={(e) =>
         setStudentProfile({ ...studentProfile, workTitle: e.target.value })
       }
-      className="rounded-xl border px-4 py-3 text-sm"
+      className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
     />
 
     <input
@@ -4289,7 +4289,7 @@ if (screen === "studentProfile") {
       onChange={(e) =>
         setStudentProfile({ ...studentProfile, school: e.target.value })
       }
-      className="rounded-xl border px-4 py-3 text-sm"
+      className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
     />
 
     <input
@@ -4299,7 +4299,7 @@ if (screen === "studentProfile") {
       onChange={(e) =>
         setStudentProfile({ ...studentProfile, linkedinUrl: e.target.value })
       }
-      className="rounded-xl border px-4 py-3 text-sm"
+      className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
     />
   </>
 )}
@@ -4425,8 +4425,8 @@ if (screen === "studentProfile") {
     }
   }}
 
-  className={`mt-4 rounded-2xl border px-4 py-3 text-sm font-semibold transition-colors ${
-    !creatingAccount && seatedRole && studentProfile.email && studentProfile.password && studentProfile.firstName && studentProfile.lastName ? "hover:bg-gray-50" : "opacity-50 cursor-not-allowed"
+  className={`mt-4 rounded-2xl border border-white text-white px-4 py-3 text-sm font-semibold transition-colors ${
+    !creatingAccount && seatedRole && studentProfile.email && studentProfile.password && studentProfile.firstName && studentProfile.lastName ? "hover:bg-gray-50 hover:text-black" : "opacity-50 cursor-not-allowed"
   }`}
 >
   {creatingAccount ? "Creating account..." : "Continue"}
@@ -4451,7 +4451,7 @@ if (screen === "studentProfile") {
               setSeatedRole(null);
               setScreen("role");
             }}
-            className={`rounded-2xl border px-4 py-3 text-sm font-semibold transition-colors ${creatingAccount ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-50"}`}
+            className={`rounded-2xl border border-white text-white px-4 py-3 text-sm font-semibold transition-colors ${creatingAccount ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-50 hover:text-black"}`}
           >
             Go back
           </button>
@@ -4468,7 +4468,7 @@ if (screen === "studentLogin") {
   return (
     <main className="relative flex min-h-screen items-center justify-center bg-black px-6 min-[1536px]:max-[1650px]:scale-[0.85] min-[1536px]:max-[1650px]:origin-center">
       <div className="w-full max-w-md">
-        <h1 className="mb-6 text-center text-3xl font-bold">Log in</h1>
+        <h1 className="mb-6 text-center text-3xl font-bold text-white">Log in</h1>
 
         <div className="flex flex-col gap-4">
           <input
@@ -4481,7 +4481,7 @@ if (screen === "studentLogin") {
                 document.getElementById('login-button')?.click();
               }
             }}
-            className="rounded-xl border px-4 py-3 text-sm"
+            className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
           />
 
           <div className="relative">
@@ -4495,12 +4495,12 @@ if (screen === "studentLogin") {
                   document.getElementById('login-button')?.click();
                 }
               }}
-              className="w-full rounded-xl border px-4 py-3 text-sm pr-12"
+              className="w-full rounded-xl border border-white px-4 py-3 text-sm pr-12 text-white placeholder:text-white/50 bg-transparent"
             />
             <button
               type="button"
               onClick={() => setShowLoginPassword(!showLoginPassword)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-gray-500 hover:text-gray-700"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-white/60 hover:text-white"
             >
               {showLoginPassword ? "Hide" : "Show"}
             </button>
@@ -4573,7 +4573,7 @@ if (screen === "studentLogin") {
                 alert('Login failed. Please try again.');
               }
             }}
-            className="mt-4 rounded-2xl border px-4 py-3 text-sm font-semibold hover:bg-gray-50 disabled:opacity-50"
+            className="mt-4 rounded-2xl border border-white text-white px-4 py-3 text-sm font-semibold hover:bg-gray-50 hover:text-black disabled:opacity-50"
           >
             Continue
           </button>
@@ -4585,7 +4585,7 @@ if (screen === "studentLogin") {
               setLoginPassword('');
               setScreen("role");
             }}
-            className="rounded-2xl border px-4 py-3 text-sm font-semibold hover:bg-gray-50"
+            className="rounded-2xl border border-white text-white px-4 py-3 text-sm font-semibold hover:bg-gray-50 hover:text-black"
           >
             Go back
           </button>
