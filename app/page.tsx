@@ -153,6 +153,13 @@ function toTitleCase(str: string): string {
     .toLowerCase()
     .split(' ')
     .map((word, index) => {
+      // Handle hyphenated words - capitalize each part (e.g., "kim-lee" -> "Kim-Lee")
+      if (word.includes('-')) {
+        return word
+          .split('-')
+          .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+          .join('-');
+      }
       // Always capitalize first word, otherwise check if it's a minor word
       if (index === 0 || !minorWords.includes(word)) {
         return word.charAt(0).toUpperCase() + word.slice(1);
