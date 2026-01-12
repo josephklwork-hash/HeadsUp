@@ -4333,7 +4333,7 @@ if (screen === "studentProfile") {
    try {
       const sanitizedProfile = profileValidation.sanitized;
       
-      // Create auth user
+      // Create auth user (no email verification required)
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email: emailValidation.sanitized,
         password: studentProfile.password,
@@ -4349,44 +4349,48 @@ if (screen === "studentProfile") {
         return;
       }
       
-     // Store profile data in localStorage to be saved after email verification
-      localStorage.setItem('pendingProfile', JSON.stringify({
-        id: authData.user.id,
-        email: emailValidation.sanitized,
+      // Create profile immediately (no email verification wait)
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .insert({
+          id: authData.user.id,
+          email: emailValidation.sanitized,
+          first_name: toTitleCase(sanitizedProfile.firstName),
+          last_name: toTitleCase(sanitizedProfile.lastName),
+          role: seatedRole,
+          year: seatedRole === 'student' ? sanitizedProfile.year : null,
+          major: seatedRole === 'student' ? toTitleCase(sanitizedProfile.major) : null,
+          school: sanitizedProfile.school || null,
+          company: seatedRole === 'professional' ? sanitizedProfile.company : null,
+          work_title: seatedRole === 'professional' ? sanitizedProfile.workTitle : null,
+          linkedin_url: sanitizedProfile.linkedinUrl || null,
+        });
+      
+      if (profileError) {
+        alert('Profile creation failed. Please try again.');
+        return;
+      }
+      
+      // Success - reset rate limit and update state
+      resetRateLimit('SIGNUP');
+      
+      // Keep user signed in with their profile info
+      setStudentProfile({
         firstName: toTitleCase(sanitizedProfile.firstName),
         lastName: toTitleCase(sanitizedProfile.lastName),
-        role: seatedRole,
-        year: seatedRole === 'student' ? sanitizedProfile.year : null,
-        major: seatedRole === 'student' ? toTitleCase(sanitizedProfile.major) : null,
-        school: sanitizedProfile.school || null,
-        company: seatedRole === 'professional' ? sanitizedProfile.company : null,
-        workTitle: seatedRole === 'professional' ? sanitizedProfile.workTitle : null,
-        linkedinUrl: sanitizedProfile.linkedinUrl || null,
-      }));
-      
-      // Success - show alert IMMEDIATELY (don't wait for profile insert or signOut)
-      resetRateLimit('SIGNUP');
-      alert('Account created! Please check your email to verify.');
-      
-      // Reset state
-      setStudentProfile({
-        firstName: "",
-        lastName: "",
-        email: "",
-        password: "",
-        year: "",
-        major: "",
-        school: "",
-        company: "",
-        workTitle: "",
-        linkedinUrl: "",
+        email: emailValidation.sanitized,
+        password: '',
+        year: seatedRole === 'student' ? sanitizedProfile.year : '',
+        major: seatedRole === 'student' ? toTitleCase(sanitizedProfile.major) : '',
+        school: sanitizedProfile.school || '',
+        company: seatedRole === 'professional' ? sanitizedProfile.company : '',
+        workTitle: seatedRole === 'professional' ? sanitizedProfile.workTitle : '',
+        linkedinUrl: sanitizedProfile.linkedinUrl || '',
       });
-      setSeatedRole(null);
-      setSbUser(null);
+      
+      // Navigate to title screen (user is now signed in)
       setScreen("role");
       
-      // Sign out in background (non-blocking)
-      supabase.auth.signOut().catch(() => {});
     } catch (e) {
       alert('Sign up failed. Please try again.');
     }
@@ -4504,35 +4508,6 @@ if (screen === "studentLogin") {
                   return;
                 }
                 
-                // Check if there's a pending profile from signup
-                const pendingProfileStr = localStorage.getItem('pendingProfile');
-                if (pendingProfileStr) {
-                  try {
-                    const pendingProfile = JSON.parse(pendingProfileStr);
-                    if (pendingProfile.id === data.user.id) {
-                      // Save the pending profile now that user is verified
-                      await supabase
-                        .from('profiles')
-                        .upsert({
-                          id: pendingProfile.id,
-                          email: pendingProfile.email,
-                          first_name: pendingProfile.firstName,
-                          last_name: pendingProfile.lastName,
-                          role: pendingProfile.role,
-                          year: pendingProfile.year,
-                          major: pendingProfile.major,
-                          school: pendingProfile.school,
-                          company: pendingProfile.company,
-                          work_title: pendingProfile.workTitle,
-                          linkedin_url: pendingProfile.linkedinUrl,
-                        }, { onConflict: 'id' });
-                      localStorage.removeItem('pendingProfile');
-                    }
-                  } catch (e) {
-                    // Silently ignore - profile will be created on next login
-                  }
-                }
-                
                 // Fetch profile to get role and details
                 const { data: profile, error: profileError } = await supabase
                   .from('profiles')
@@ -4541,74 +4516,8 @@ if (screen === "studentLogin") {
                   .single();
                 
                 if (profileError || !profile) {
-                  // No profile exists - create a minimal one and redirect to edit profile
-                  const pendingData = localStorage.getItem('pendingProfile');
-                  let profileToCreate: any = {
-                    id: data.user.id,
-                    email: data.user.email,
-                    first_name: '',
-                    last_name: '',
-                    role: 'student',
-                  };
-                  
-                  // Try to use pending profile data if available
-                  if (pendingData) {
-                    try {
-                      const pending = JSON.parse(pendingData);
-                      if (pending.id === data.user.id) {
-                        profileToCreate = {
-                          id: pending.id,
-                          email: pending.email,
-                          first_name: pending.firstName,
-                          last_name: pending.lastName,
-                          role: pending.role,
-                          year: pending.year,
-                          major: pending.major,
-                          school: pending.school,
-                          company: pending.company,
-                          work_title: pending.workTitle,
-                          linkedin_url: pending.linkedinUrl,
-                        };
-                      }
-                    } catch (e) {}
-                  }
-                  
-                  // Create the profile
-                  const { error: createError } = await supabase
-                    .from('profiles')
-                    .insert(profileToCreate);
-                  
-                  if (createError) {
-                    alert('Failed to create profile. Please try again.');
-                    return;
-                  }
-                  
-                  localStorage.removeItem('pendingProfile');
-                  
-                  // Set state and redirect to edit profile to complete setup
-                  setStudentProfile({
-                    firstName: profileToCreate.first_name || '',
-                    lastName: profileToCreate.last_name || '',
-                    email: profileToCreate.email || '',
-                    password: '',
-                    year: profileToCreate.year || '',
-                    major: profileToCreate.major || '',
-                    school: profileToCreate.school || '',
-                    company: profileToCreate.company || '',
-                    workTitle: profileToCreate.work_title || '',
-                    linkedinUrl: profileToCreate.linkedin_url || '',
-                  });
-                  setSeatedRole(profileToCreate.role as Role);
-                  setLoginEmail('');
-                  setLoginPassword('');
-                  
-                  // If profile is incomplete, send to edit profile
-                  if (!profileToCreate.first_name || !profileToCreate.last_name) {
-                    alert('Please complete your profile.');
-                    setScreen("editProfile");
-                  } else {
-                    setScreen("role");
-                  }
+                  alert('No account found. Please sign up first.');
+                  await supabase.auth.signOut();
                   return;
                 }
                 
