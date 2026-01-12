@@ -146,6 +146,15 @@ function formatBB(value: number | "") {
   return value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 }
 
+function toTitleCase(str: string): string {
+  if (!str) return str;
+  return str
+    .toLowerCase()
+    .split(' ')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
 function clamp(n: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, n));
 }
@@ -4337,11 +4346,11 @@ if (screen === "studentProfile") {
       localStorage.setItem('pendingProfile', JSON.stringify({
         id: authData.user.id,
         email: emailValidation.sanitized,
-        firstName: sanitizedProfile.firstName,
-        lastName: sanitizedProfile.lastName,
+        firstName: toTitleCase(sanitizedProfile.firstName),
+        lastName: toTitleCase(sanitizedProfile.lastName),
         role: seatedRole,
         year: seatedRole === 'student' ? sanitizedProfile.year : null,
-        major: seatedRole === 'student' ? sanitizedProfile.major : null,
+        major: seatedRole === 'student' ? toTitleCase(sanitizedProfile.major) : null,
         school: sanitizedProfile.school || null,
         company: seatedRole === 'professional' ? sanitizedProfile.company : null,
         workTitle: seatedRole === 'professional' ? sanitizedProfile.workTitle : null,
@@ -5492,10 +5501,10 @@ if (screen === "editProfile") {
       const { error } = await supabase
         .from('profiles')
         .update({
-          first_name: sanitizedProfile.firstName,
-          last_name: sanitizedProfile.lastName,
+          first_name: toTitleCase(sanitizedProfile.firstName),
+          last_name: toTitleCase(sanitizedProfile.lastName),
           year: seatedRole === 'student' ? sanitizedProfile.year : null,
-          major: seatedRole === 'student' ? sanitizedProfile.major : null,
+          major: seatedRole === 'student' ? toTitleCase(sanitizedProfile.major) : null,
           school: sanitizedProfile.school || null,
           company: seatedRole === 'professional' ? sanitizedProfile.company : null,
           work_title: seatedRole === 'professional' ? sanitizedProfile.workTitle : null,
