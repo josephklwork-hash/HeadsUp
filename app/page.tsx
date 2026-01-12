@@ -148,10 +148,17 @@ function formatBB(value: number | "") {
 
 function toTitleCase(str: string): string {
   if (!str) return str;
+  const minorWords = ['of', 'the', 'and', 'in', 'on', 'at', 'to', 'for', 'a', 'an'];
   return str
     .toLowerCase()
     .split(' ')
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .map((word, index) => {
+      // Always capitalize first word, otherwise check if it's a minor word
+      if (index === 0 || !minorWords.includes(word)) {
+        return word.charAt(0).toUpperCase() + word.slice(1);
+      }
+      return word;
+    })
     .join(' ');
 }
 
