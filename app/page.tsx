@@ -1069,6 +1069,7 @@ const setStreetBettor = (next: any) =>
   const [joinPinInput, setJoinPinInput] = useState("");
   const [creatingGame, setCreatingGame] = useState(false);
   const [creatingAccount, setCreatingAccount] = useState(false);
+  const [editProfileReturnScreen, setEditProfileReturnScreen] = useState<Screen>("role");
   const [pinLockoutUntil, setPinLockoutUntil] = useState<number | null>(null);
   const [isCreatingPin, setIsCreatingPin] = useState(false);
 
@@ -3921,6 +3922,7 @@ const joinGame = () => {
             type="button"
             onClick={() => {
               setStudentMenuOpen(false);
+              setEditProfileReturnScreen("role");
               setScreen("editProfile");
             }}
             className="w-full flex items-center px-4 py-2 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-1.5 text-left text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black hover:bg-gray-100"
@@ -4600,7 +4602,10 @@ if (screen === "dashboard" && seatedRole === "student") {
 
   <button
     type="button"
-    onClick={() => setScreen("editProfile")}
+    onClick={() => {
+      setEditProfileReturnScreen("dashboard");
+      setScreen("editProfile");
+    }}
     className="rounded-xl border px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50"
   >
     Edit Profile
@@ -4907,7 +4912,10 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
 
   <button
     type="button"
-    onClick={() => setScreen("editProfile")}
+    onClick={() => {
+      setEditProfileReturnScreen("professionalDashboard");
+      setScreen("editProfile");
+    }}
     className="rounded-xl border px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50"
   >
     Edit Profile
@@ -5453,7 +5461,7 @@ if (screen === "editProfile") {
       if (error) {
         alert('Failed to save. Please try again.');
       } else {
-        // Update local state with the saved values
+        // Update local state with saved values
         setStudentProfile({
           ...studentProfile,
           firstName: toTitleCase(sanitizedProfile.firstName),
@@ -5465,9 +5473,8 @@ if (screen === "editProfile") {
           workTitle: seatedRole === 'professional' ? sanitizedProfile.workTitle : '',
           linkedinUrl: sanitizedProfile.linkedinUrl || '',
         });
-        
         alert('Profile updated!');
-        setScreen(seatedRole === 'professional' ? 'professionalDashboard' : 'dashboard');
+        setScreen(editProfileReturnScreen);
       }
     } finally {
       setSavingProfile(false);
