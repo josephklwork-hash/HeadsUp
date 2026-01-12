@@ -4366,14 +4366,17 @@ if (screen === "studentProfile") {
           linkedin_url: sanitizedProfile.linkedinUrl || null,
         });
       
-      if (profileError) {
+                  if (profileError) {
         alert('Profile creation failed. Please try again.');
         return;
       }
+
+      alert("Profile created successfully.");
       
       // Success - reset rate limit and update state
       resetRateLimit('SIGNUP');
-      
+
+
       // Keep user signed in with their profile info
       setStudentProfile({
         firstName: toTitleCase(sanitizedProfile.firstName),
