@@ -67,7 +67,8 @@ export class MultiplayerJoiner {
    * Request the current game state from host
    */
   private requestState() {
-    setTimeout(() => {
+    // Retry requesting state multiple times in case host isn't ready yet
+    const requestOnce = () => {
       this.channel.send({
         type: "broadcast",
         event: "mp",
@@ -79,7 +80,13 @@ export class MultiplayerJoiner {
       }).catch(() => {
         // Silently ignore request errors
       });
-    }, 300);
+    };
+    
+    // Request immediately, then retry a few times
+    setTimeout(requestOnce, 300);
+    setTimeout(requestOnce, 1000);
+    setTimeout(requestOnce, 2000);
+    setTimeout(requestOnce, 4000);
   }
   
   /**

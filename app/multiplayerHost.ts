@@ -538,6 +538,13 @@ if (this.onStateChange) {
   private handleCall(seat: Seat) {
     const otherSeat = seat === "top" ? "bottom" : "top";
     const toCall = roundToHundredth(this.state.game.bets[otherSeat] - this.state.game.bets[seat]);
+    
+    // If nothing to call, treat as check instead
+    if (toCall <= 0) {
+      this.handleCheck(seat);
+      return;
+    }
+    
     const actualCall = roundToHundredth(Math.min(toCall, this.state.game.stacks[seat]));
     
     this.state.game.bets[seat] = roundToHundredth(this.state.game.bets[seat] + actualCall);

@@ -288,7 +288,7 @@ const VALIDATION_SCHEMAS = {
     errorMessage: 'Name can only contain letters, spaces, hyphens, and apostrophes'
   },
   linkedinUrl: {
-    pattern: /^https?:\/\/(www\.)?linkedin\.com\/in\/[\w-]+\/?$/i,
+    pattern: /^(https?:\/\/)?(www\.)?linkedin\.com\/in\/[\w-]+\/?$/i,
     maxLength: 200,
     minLength: 0, // Optional
     errorMessage: 'Please enter a valid LinkedIn URL (e.g., https://linkedin.com/in/yourname)'
@@ -1074,6 +1074,7 @@ const [mpState, setMpState] = useState<HostState | null>(null);
 
     const isHost = mySeat === "bottom";
   const suppressMpRef = useRef(false);
+  const mpChannelRef = useRef<any>(null);
 
   function applyActionFromSeat(seat: Seat, action: GameAction) {
     // remote actions must bypass local click gating
@@ -1170,29 +1171,21 @@ const [lastMessages, setLastMessages] = useState<Map<string, { text: string; cre
 async function sendConnectionRequest(recipientId: string, recipientName: string) {
   if (!sbUser?.id) return;
   
-  // === SERVER-SIDE RATE LIMITING ===
-  try {
-    const { data: allowed, error: rlError } = await supabase.rpc('check_rate_limit', {
-      p_user_id: sbUser.id,
-      p_action_type: 'connection_request',
-      p_max_attempts: 20,
-      p_window_seconds: 3600
-    });
-    
-    if (rlError) {
-      console.error('Rate limit check failed:', rlError);
-    } else if (allowed === false) {
-      alert('Too many connection requests. Please wait before sending more.');
-      return;
-    }
-  } catch (e) {
-    console.error('Rate limit error:', e);
+  // Rate limiting handled client-side
+  const rateLimitCheck = checkRateLimit('CONNECTION_REQUEST', sbUser.id);
+  if (!rateLimitCheck.allowed) {
+    alert(rateLimitCheck.message);
+    return;
   }
+  recordRateLimitAttempt('CONNECTION_REQUEST', sbUser.id);
   
   if (recipientId === sbUser.id) {
     alert('You cannot connect with yourself');
     return;
   }
+  
+  // Optimistic update - show "Pending" immediately
+  setPendingOutgoing(prev => new Set(prev).add(recipientId));
   
   const { error } = await supabase
     .from('connections')
@@ -1203,20 +1196,34 @@ async function sendConnectionRequest(recipientId: string, recipientName: string)
     });
   
   if (error) {
+    // Revert the optimistic update
+    setPendingOutgoing(prev => {
+      const next = new Set(prev);
+      next.delete(recipientId);
+      return next;
+    });
+    
     if (error.code === '23505') {
+      // Actually it was already sent, so keep it as pending
+      setPendingOutgoing(prev => new Set(prev).add(recipientId));
       alert('Connection request already sent!');
     } else {
       alert('Failed to send request. Please try again.');
     }
     return;
   }
-  
-  setPendingOutgoing(prev => new Set(prev).add(recipientId));
-  alert(`Connection request sent to ${recipientName}!`);
 }
 
 async function acceptConnection(odId: string, connectionId: string, odName: string) {
   if (!sbUser?.id) return;
+  
+  // Optimistic update
+  setMyConnections(prev => new Set(prev).add(odId));
+  setPendingIncoming(prev => {
+    const next = new Map(prev);
+    next.delete(odId);
+    return next;
+  });
   
   const { error } = await supabase
     .from('connections')
@@ -1228,18 +1235,17 @@ async function acceptConnection(odId: string, connectionId: string, odName: stri
     alert('Failed to accept: ' + error.message);
     return;
   }
+}
+
+async function rejectConnection(odId: string, connectionId: string) {
+  if (!sbUser?.id) return;
   
-  setMyConnections(prev => new Set(prev).add(odId));
+  // Optimistic update
   setPendingIncoming(prev => {
     const next = new Map(prev);
     next.delete(odId);
     return next;
   });
-  alert(`You are now connected with ${odName}!`);
-}
-
-async function rejectConnection(odId: string, connectionId: string) {
-  if (!sbUser?.id) return;
   
   const { error } = await supabase
     .from('connections')
@@ -1251,12 +1257,6 @@ async function rejectConnection(odId: string, connectionId: string) {
     alert('Failed to reject: ' + error.message);
     return;
   }
-  
-  setPendingIncoming(prev => {
-    const next = new Map(prev);
-    next.delete(odId);
-    return next;
-  });
 }
 
 const [savingProfile, setSavingProfile] = useState(false);
@@ -1299,7 +1299,20 @@ useEffect(() => {
   if (!gamePin) return; // Not in a PIN game
   if (mySeat !== "bottom") return; // Only host needs this
 
-  // Poll for game becoming active
+  // Listen for joiner's broadcast message (primary method)
+  const ch = supabase.channel(`game:${gameId}`);
+  
+  ch.on("broadcast", { event: "mp" }, ({ payload }: any) => {
+    if (payload?.event === "JOINER_READY") {
+      setMultiplayerActive(true);
+      setSeatedRole((prev) => prev ?? "student");
+      setScreen("game");
+    }
+  });
+  
+  ch.subscribe();
+
+  // Also poll for game becoming active (backup)
   const interval = setInterval(async () => {
     const { data } = await supabase
       .from("games")
@@ -1315,7 +1328,10 @@ useEffect(() => {
     }
   }, 1000);
 
-  return () => clearInterval(interval);
+  return () => {
+    clearInterval(interval);
+    supabase.removeChannel(ch);
+  };
 }, [gameId, multiplayerActive, gamePin, mySeat]);
 
 useEffect(() => {
@@ -1323,57 +1339,95 @@ useEffect(() => {
   if (!multiplayerActive) return;
 
   const ch = supabase.channel(`game:${gameId}`);
+  mpChannelRef.current = ch;
+
+  // Track if we've sent our info (to avoid infinite loop)
+  let sentMyInfo = false;
+  let hostController: MultiplayerHost | null = null;
+  let joinerController: MultiplayerJoiner | null = null;
+
+  // Set up listeners BEFORE subscribing (required for Supabase realtime)
+  ch.on("broadcast", { event: "mp" }, ({ payload }: any) => {
+    if (!payload) return;
+    if (payload.sender === (sbUser?.id ?? (isHost ? 'host' : 'joiner'))) return;
+    
+    if (payload.event === "PLAYER_INFO") {
+      setOpponentName(payload.name || null);
+      
+      if (!sentMyInfo) {
+        sentMyInfo = true;
+        ch.send({
+          type: "broadcast",
+          event: "mp",
+          payload: {
+            event: "PLAYER_INFO",
+            name: studentProfile.firstName || null,
+            sender: sbUser?.id ?? (isHost ? 'host' : 'joiner'),
+          },
+        });
+      }
+    }
+    
+    if (payload.event === "PLAY_AGAIN_REQUEST") {
+      setOpponentWantsPlayAgain(true);
+    }
+    
+    if (payload.event === "PLAY_AGAIN_ACCEPT") {
+      setPlayAgainRequested(false);
+      setOpponentWantsPlayAgain(false);
+      setHandLogHistory([]);
+      setLogViewOffset(0);
+      
+      if (isHost && mpHostRef.current) {
+        mpHostRef.current.resetGame();
+        setMpState(JSON.parse(JSON.stringify(mpHostRef.current.getState())));
+      }
+    }
+    
+    // HOST: Handle joiner's requests for state
+    if (isHost && payload.event === "SYNC" && payload.kind === "REQUEST_SNAPSHOT") {
+      if (mpHostRef.current) {
+        const state = mpHostRef.current.getState();
+        if (state) {
+          ch.send({
+            type: "broadcast",
+            event: "mp",
+            payload: {
+              event: "HOST_STATE",
+              sender: sbUser?.id ?? 'host',
+              state: state,
+            },
+          });
+        }
+      }
+    }
+    
+    // HOST: Handle joiner's actions
+    if (isHost && payload.event === "ACTION" && payload.seat === "top" && mpHostRef.current) {
+      mpHostRef.current.processAction(payload.seat, payload.action);
+      setMpState(JSON.parse(JSON.stringify(mpHostRef.current.getState())));
+    }
+    
+    // HOST: Handle joiner's show hand
+    if (isHost && payload.event === "SHOW_HAND" && payload.seat === "top" && mpHostRef.current) {
+      mpHostRef.current.showHand(payload.seat);
+      setMpState(JSON.parse(JSON.stringify(mpHostRef.current.getState())));
+    }
+    
+    // JOINER: Handle host's state updates
+    if (!isHost && payload.event === "HOST_STATE" && payload.state) {
+      setMpState(payload.state);
+    }
+    
+    // Both: Handle opponent quit
+    if (payload.event === "PLAYER_QUIT") {
+      setOpponentQuit(true);
+    }
+  });
 
   // Subscribe to channel
   ch.subscribe((status) => {
     if (status === 'SUBSCRIBED') {
-      
-      // Track if we've sent our info (to avoid infinite loop)
-      let sentMyInfo = false;
-      
-      // Listen for opponent's profile info and play again events
-      ch.on("broadcast", { event: "mp" }, ({ payload }: any) => {
-        if (!payload) return;
-        if (payload.sender === (sbUser?.id ?? (isHost ? 'host' : 'joiner'))) return;
-        
-        if (payload.event === "PLAYER_INFO") {
-          setOpponentName(payload.name || null);
-          
-          // Reply with our own info if we haven't yet (ensures both sides get names)
-          if (!sentMyInfo) {
-            sentMyInfo = true;
-            ch.send({
-              type: "broadcast",
-              event: "mp",
-              payload: {
-                event: "PLAYER_INFO",
-                name: studentProfile.firstName || null,
-                sender: sbUser?.id ?? (isHost ? 'host' : 'joiner'),
-              },
-            });
-          }
-        }
-        
-        // Handle play again request from opponent
-        if (payload.event === "PLAY_AGAIN_REQUEST") {
-          setOpponentWantsPlayAgain(true);
-        }
-        
-        // Handle play again accept - opponent accepted our request
-        if (payload.event === "PLAY_AGAIN_ACCEPT") {
-          setPlayAgainRequested(false);
-          setOpponentWantsPlayAgain(false);
-          setHandLogHistory([]);
-          setLogViewOffset(0);
-          
-          // Host resets the game when receiving accept from joiner
-          if (isHost && mpHostRef.current) {
-            mpHostRef.current.resetGame();
-            setMpState(JSON.parse(JSON.stringify(mpHostRef.current.getState())));
-          }
-          // Joiner will receive new state automatically via the normal state sync
-        }
-      });
       
       if (isHost) {
         // Send host's profile info to joiner (with delay to ensure joiner is listening)
@@ -1424,6 +1478,29 @@ useEffect(() => {
         sessionStorage.setItem('headsup_hostState', JSON.stringify(initialState));
         // Clear savedHostState after using it
         setSavedHostState(null);
+        
+        // Broadcast initial state multiple times to ensure joiner receives it
+        const broadcastState = () => {
+          const state = host.getState();
+          if (state) {
+            ch.send({
+              type: "broadcast",
+              event: "mp",
+              payload: {
+                event: "HOST_STATE",
+                sender: sbUser?.id ?? 'host',
+                state: state,
+              },
+            });
+          }
+        };
+        
+        broadcastState();
+        setTimeout(broadcastState, 500);
+        setTimeout(broadcastState, 1000);
+        setTimeout(broadcastState, 2000);
+        setTimeout(broadcastState, 3000);
+        setTimeout(broadcastState, 5000);
         
       } else {
         // JOINER: Create joiner controller
@@ -1484,37 +1561,48 @@ useEffect(() => {
     const { data } = await supabase.auth.getUser();
     if (!mounted) return;
     
+    // If user exists but hasn't verified email, sign them out immediately
+    if (data.user && !data.user.is_anonymous && !data.user.email_confirmed_at) {
+      await supabase.auth.signOut();
+      setSbUser(null);
+      return;
+    }
+    
     setSbUser(data.user ?? null);
     
-    // If user is logged in, fetch their profile
-    if (data.user) {
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', data.user.id)
-        .single();
-      
-      if (profile && mounted) {
-        setStudentProfile({
-          firstName: profile.first_name,
-          lastName: profile.last_name,
-          email: profile.email,
-          password: '',
-          year: profile.year || '',
-          major: profile.major || '',
-          school: profile.school || '',
-          company: profile.company || '',
-          workTitle: profile.work_title || '',
-          linkedinUrl: profile.linkedin_url || '',
-        });
-        setSeatedRole(profile.role as Role);
+    // Only fetch profile for verified, non-anonymous users
+    if (data.user && !data.user.is_anonymous && data.user.email_confirmed_at) {
+      try {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', data.user.id)
+          .single();
+        
+        if (profile && mounted) {
+          setStudentProfile({
+            firstName: profile.first_name || '',
+            lastName: profile.last_name || '',
+            email: profile.email || '',
+            password: '',
+            year: profile.year || '',
+            major: profile.major || '',
+            school: profile.school || '',
+            company: profile.company || '',
+            workTitle: profile.work_title || '',
+            linkedinUrl: profile.linkedin_url || '',
+          });
+          setSeatedRole(profile.role as Role);
+        }
+      } catch (e) {
+        // Silently ignore profile fetch errors
       }
     }
   }
   
   initAuth();
 
-  const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+  const { data: sub } = supabase.auth.onAuthStateChange(async (event, session) => {
     setSbUser(session?.user ?? null);
   });
 
@@ -1779,27 +1867,14 @@ async function createPinGame() {
     return;
   }
 
-  // Rate limit check (AFTER user is authenticated)
-  try {
-    const { data: allowed, error: rlError } = await supabase.rpc('check_rate_limit', {
-      p_user_id: user.id,
-      p_action_type: 'game_create',
-      p_max_attempts: 10,
-      p_window_seconds: 3600
-    });
-    
-    if (rlError) {
-      console.error('Rate limit check failed:', rlError);
-      // Continue anyway - don't block game creation if rate limiting fails
-    } else if (allowed === false) {
-      alert('Too many games created. Please wait an hour before creating another.');
-      setCreatingGame(false);
-      return;
-    }
-  } catch (e) {
-    console.error('Rate limit error:', e);
-    // Continue anyway
+  // Rate limiting handled client-side
+  const rateLimitCheck = checkRateLimit('GAME_CREATE', user.id);
+  if (!rateLimitCheck.allowed) {
+    alert(rateLimitCheck.message);
+    setCreatingGame(false);
+    return;
   }
+  recordRateLimitAttempt('GAME_CREATE', user.id);
 
   // attempt to create a unique 4-digit PIN
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -1883,54 +1958,20 @@ async function getOrCreateUser() {
 
 async function joinPinGame() {
   const pin = joinPinInput.trim();
-  
-  // === INPUT VALIDATION ===
-  const pinValidation = validateInput(pin, 'gamePin', { required: true });
-  if (!pinValidation.valid) {
-    alert(pinValidation.error);
-    return;
-  }
-  
-  // Prevent multiple simultaneous join attempts
-  if (creatingGame) {
-    return;
-  }
+  if (pin.length !== 4) return;
+  if (creatingGame) return;
   
   setCreatingGame(true);
   
   let user: User;
   try {
-    const { data: anonData, error: anonErr } =
-      await supabase.auth.signInAnonymously();
-    
-    if (anonErr || !anonData.user) {
-      throw anonErr;
-    }
+    const { data: anonData, error: anonErr } = await supabase.auth.signInAnonymously();
+    if (anonErr || !anonData.user) throw anonErr;
     user = anonData.user;
   } catch (e) {
-    alert("Network error: Could not connect to server. Please check your internet connection and try again.");
+    alert("Could not connect. Check your internet.");
     setCreatingGame(false);
     return;
-  }
-  
-  // === SERVER-SIDE RATE LIMITING (after auth) ===
-  try {
-    const { data: allowed, error: rlError } = await supabase.rpc('check_rate_limit', {
-      p_user_id: user.id,
-      p_action_type: 'pin_join',
-      p_max_attempts: 5,
-      p_window_seconds: 60
-    });
-    
-    if (rlError) {
-      console.error('Rate limit check failed:', rlError);
-    } else if (allowed === false) {
-      alert('Too many attempts. Please wait a minute before trying again.');
-      setCreatingGame(false);
-      return;
-    }
-  } catch (e) {
-    console.error('Rate limit error:', e);
   }
 
   const { data: gameRow, error: gameErr } = await supabase
@@ -1940,12 +1981,11 @@ async function joinPinGame() {
     .single();
 
   if (gameErr || !gameRow) {
-    alert('Invalid PIN. Please try again.');
+    alert('Invalid PIN.');
     setCreatingGame(false);
     return;
   }
   
-  // join as top seat
   const { error: playerErr } = await supabase.from("game_players").insert({
     game_id: gameRow.id,
     user_id: user.id,
@@ -1953,30 +1993,45 @@ async function joinPinGame() {
   });
 
   if (playerErr) {
-    alert("Could not join game. The seat may already be taken.");
+    alert("Could not join. Seat may be taken.");
     setCreatingGame(false);
     return;
   }
   
-  // mark game as active
-  await supabase.from("games").update({ status: "active" }).eq("id", gameRow.id);
+ await supabase.from("games").update({ status: "active" }).eq("id", gameRow.id);
+
+  // Broadcast to host that joiner has joined
+  const tempChannel = supabase.channel(`game:${gameRow.id}`);
+  tempChannel.subscribe((status) => {
+    if (status === 'SUBSCRIBED') {
+      const notifyHost = () => {
+        tempChannel.send({
+          type: "broadcast",
+          event: "mp",
+          payload: {
+            event: "JOINER_READY",
+            sender: user.id,
+          },
+        });
+      };
+      notifyHost();
+      setTimeout(notifyHost, 300);
+      setTimeout(notifyHost, 600);
+      setTimeout(notifyHost, 1000);
+    }
+  });
 
   setJoinMode(false);
   setJoinPinInput("");
   setGamePin(gameRow.pin);
-
   setGameId(gameRow.id);
-
-  // IMPORTANT: set seat BEFORE enabling multiplayer so isHost is never true on joiner
   setMySeat("top");
   setMultiplayerActive(true);
 
-  // Save session for reconnection
   sessionStorage.setItem('headsup_gameId', gameRow.id);
   sessionStorage.setItem('headsup_mySeat', 'top');
   sessionStorage.setItem('headsup_gamePin', gameRow.pin);
 
-  // enter the game screen and wait for host's RESET
   clearTimers();
   setBetSize(2);
   setSeatedRole((prev) => prev ?? "student");
@@ -2422,11 +2477,11 @@ const youRaw2 = mySeat === "bottom" ? bottomRaw2 : topRaw2;
 
   const heroHandRank = useMemo(() => {
   if (!youC || !youD) return null;
-  if (street === 0) return null; // only postflop
-  const shownBoard = board.slice(0, street);
+  if (displayStreet === 0) return null; // only postflop
+  const shownBoard = board.slice(0, displayStreet);
   const score = evaluate7([youC, youD, ...shownBoard]);
   return handRankOnly(score);
-}, [youC, youD, board, street]);
+}, [youC, youD, board, displayStreet]);
 
   /* post blinds at start of each hand */
 useEffect(() => {
@@ -3107,9 +3162,18 @@ if (street === 5 && currentFacingBet(seat)) {
       mpHost.processAction(seat, action);
       // Update our display
       setMpState(JSON.parse(JSON.stringify(mpHost.getState())));
-    } else if (mpJoiner) {
-      // JOINER: Send action to host
-      mpJoiner.sendAction(seat, action);
+    } else if (mpChannelRef.current) {
+      // JOINER: Send action to host directly via channel
+      mpChannelRef.current.send({
+        type: "broadcast",
+        event: "mp",
+        payload: {
+          event: "ACTION",
+          seat,
+          action,
+          sender: sbUser?.id ?? 'joiner',
+        },
+      });
     }
     return;
   }
@@ -3692,7 +3756,15 @@ useEffect(() => {
           supabase
             .from('messages')
             .update({ read: true })
-            .eq('id', m.id);
+            .eq('id', m.id)
+            .then(() => {
+              // Also clear unread count for this user in UI
+              setUnreadCounts(prev => {
+                const next = new Map(prev);
+                next.delete(selectedChatUser.id);
+                return next;
+              });
+            });
         }
       }
     })
@@ -3713,24 +3785,13 @@ async function sendMessage() {
     return;
   }
   
-  // === SERVER-SIDE RATE LIMITING ===
-  try {
-    const { data: allowed, error: rlError } = await supabase.rpc('check_rate_limit', {
-      p_user_id: sbUser.id,
-      p_action_type: 'message_send',
-      p_max_attempts: 30,
-      p_window_seconds: 60
-    });
-    
-    if (rlError) {
-      console.error('Rate limit check failed:', rlError);
-    } else if (allowed === false) {
-      alert('Sending too fast. Please slow down.');
-      return;
-    }
-  } catch (e) {
-    console.error('Rate limit error:', e);
+  // Rate limiting handled client-side
+  const rateLimitCheck = checkRateLimit('MESSAGE_SEND', sbUser.id);
+  if (!rateLimitCheck.allowed) {
+    alert(rateLimitCheck.message);
+    return;
   }
+  recordRateLimitAttempt('MESSAGE_SEND', sbUser.id);
   
   const { error } = await supabase
     .from('messages')
@@ -4139,15 +4200,20 @@ if (screen === "studentProfile") {
       className="rounded-xl border px-4 py-3 text-sm"
     />
 
-    <input
-      type="text"
-      placeholder="Year"
+    <select
       value={studentProfile.year}
       onChange={(e) =>
         setStudentProfile({ ...studentProfile, year: e.target.value })
       }
-      className="rounded-xl border px-4 py-3 text-sm"
-    />
+      className="w-full rounded-xl border px-4 py-3 text-sm appearance-none bg-transparent text-white cursor-pointer"
+    >
+      <option value="" disabled className="bg-black text-white">Year</option>
+      <option value="1" className="bg-black text-white">1</option>
+      <option value="2" className="bg-black text-white">2</option>
+      <option value="3" className="bg-black text-white">3</option>
+      <option value="4" className="bg-black text-white">4</option>
+      <option value="Other" className="bg-black text-white">Other</option>
+    </select>
 
     <input
       type="text"
@@ -4209,21 +4275,6 @@ if (screen === "studentProfile") {
   type="button"
   disabled={!seatedRole || !studentProfile.email || !studentProfile.password || !studentProfile.firstName || !studentProfile.lastName}
   onClick={async () => {
-    // Server-side rate limiting
-    const { data: { user: tempUser } } = await supabase.auth.getUser();
-    if (tempUser) {
-      const { data: allowed } = await supabase.rpc('check_rate_limit', {
-        p_user_id: tempUser.id,
-        p_action_type: 'signup',
-        p_max_attempts: 3,
-        p_window_seconds: 60
-      });
-      if (!allowed) {
-        alert('Too many signup attempts. Please wait a minute.');
-        return;
-      }
-    }
-    
     // === EMAIL VALIDATION ===
     const emailValidation = validateEmail(studentProfile.email);
     if (!emailValidation.valid) {
@@ -4263,7 +4314,7 @@ if (screen === "studentProfile") {
     // Record attempt before API call
     recordRateLimitAttempt('SIGNUP');
     
-    try {
+   try {
       const sanitizedProfile = profileValidation.sanitized;
       
       // Create auth user
@@ -4273,8 +4324,7 @@ if (screen === "studentProfile") {
       });
       
       if (authError) {
-        // Generic error to prevent email enumeration
-        alert('Sign up failed. Please check your information and try again.');
+        alert('Sign up failed: ' + authError.message);
         return;
       }
       
@@ -4283,32 +4333,44 @@ if (screen === "studentProfile") {
         return;
       }
       
-      // Create profile with sanitized inputs
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .insert({
-          id: authData.user.id,
-          email: emailValidation.sanitized,
-          first_name: sanitizedProfile.firstName,
-          last_name: sanitizedProfile.lastName,
-          role: seatedRole,
-          year: seatedRole === 'student' ? sanitizedProfile.year : null,
-          major: seatedRole === 'student' ? sanitizedProfile.major : null,
-          school: sanitizedProfile.school || null,
-          company: seatedRole === 'professional' ? sanitizedProfile.company : null,
-          work_title: seatedRole === 'professional' ? sanitizedProfile.workTitle : null,
-          linkedin_url: sanitizedProfile.linkedinUrl || null,
-        });
+     // Store profile data in localStorage to be saved after email verification
+      localStorage.setItem('pendingProfile', JSON.stringify({
+        id: authData.user.id,
+        email: emailValidation.sanitized,
+        firstName: sanitizedProfile.firstName,
+        lastName: sanitizedProfile.lastName,
+        role: seatedRole,
+        year: seatedRole === 'student' ? sanitizedProfile.year : null,
+        major: seatedRole === 'student' ? sanitizedProfile.major : null,
+        school: sanitizedProfile.school || null,
+        company: seatedRole === 'professional' ? sanitizedProfile.company : null,
+        workTitle: seatedRole === 'professional' ? sanitizedProfile.workTitle : null,
+        linkedinUrl: sanitizedProfile.linkedinUrl || null,
+      }));
       
-      if (profileError) {
-        alert('Profile creation failed. Please try again.');
-        return;
-      }
-      
-      // Success - reset rate limit
+      // Success - show alert IMMEDIATELY (don't wait for profile insert or signOut)
       resetRateLimit('SIGNUP');
       alert('Account created! Please check your email to verify.');
+      
+      // Reset state
+      setStudentProfile({
+        firstName: "",
+        lastName: "",
+        email: "",
+        password: "",
+        year: "",
+        major: "",
+        school: "",
+        company: "",
+        workTitle: "",
+        linkedinUrl: "",
+      });
+      setSeatedRole(null);
+      setSbUser(null);
       setScreen("role");
+      
+      // Sign out in background (non-blocking)
+      supabase.auth.signOut().catch(() => {});
     } catch (e) {
       alert('Sign up failed. Please try again.');
     }
@@ -4320,6 +4382,29 @@ if (screen === "studentProfile") {
 >
   Continue
 </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setStudentProfile({
+                firstName: "",
+                lastName: "",
+                email: "",
+                password: "",
+                year: "",
+                major: "",
+                school: "",
+                company: "",
+                workTitle: "",
+                linkedinUrl: "",
+              });
+              setSeatedRole(null);
+              setScreen("role");
+            }}
+            className="rounded-2xl border px-4 py-3 text-sm font-semibold transition-colors hover:bg-gray-50"
+          >
+            Go back
+          </button>
         </div>
       </div>
     </main>
@@ -4375,7 +4460,6 @@ if (screen === "studentLogin") {
             id="login-button"
             disabled={!loginEmail || !loginPassword}
             onClick={async () => {
-              
               // === INPUT VALIDATION ===
               const emailValidation = validateEmail(loginEmail);
               if (!emailValidation.valid) {
@@ -4404,6 +4488,35 @@ if (screen === "studentLogin") {
                   return;
                 }
                 
+                // Check if there's a pending profile from signup
+                const pendingProfileStr = localStorage.getItem('pendingProfile');
+                if (pendingProfileStr) {
+                  try {
+                    const pendingProfile = JSON.parse(pendingProfileStr);
+                    if (pendingProfile.id === data.user.id) {
+                      // Save the pending profile now that user is verified
+                      await supabase
+                        .from('profiles')
+                        .upsert({
+                          id: pendingProfile.id,
+                          email: pendingProfile.email,
+                          first_name: pendingProfile.firstName,
+                          last_name: pendingProfile.lastName,
+                          role: pendingProfile.role,
+                          year: pendingProfile.year,
+                          major: pendingProfile.major,
+                          school: pendingProfile.school,
+                          company: pendingProfile.company,
+                          work_title: pendingProfile.workTitle,
+                          linkedin_url: pendingProfile.linkedinUrl,
+                        }, { onConflict: 'id' });
+                      localStorage.removeItem('pendingProfile');
+                    }
+                  } catch (e) {
+                    // Silently ignore - profile will be created on next login
+                  }
+                }
+                
                 // Fetch profile to get role and details
                 const { data: profile, error: profileError } = await supabase
                   .from('profiles')
@@ -4412,7 +4525,74 @@ if (screen === "studentLogin") {
                   .single();
                 
                 if (profileError || !profile) {
-                  alert('Could not load profile');
+                  // No profile exists - create a minimal one and redirect to edit profile
+                  const pendingData = localStorage.getItem('pendingProfile');
+                  let profileToCreate: any = {
+                    id: data.user.id,
+                    email: data.user.email,
+                    first_name: '',
+                    last_name: '',
+                    role: 'student',
+                  };
+                  
+                  // Try to use pending profile data if available
+                  if (pendingData) {
+                    try {
+                      const pending = JSON.parse(pendingData);
+                      if (pending.id === data.user.id) {
+                        profileToCreate = {
+                          id: pending.id,
+                          email: pending.email,
+                          first_name: pending.firstName,
+                          last_name: pending.lastName,
+                          role: pending.role,
+                          year: pending.year,
+                          major: pending.major,
+                          school: pending.school,
+                          company: pending.company,
+                          work_title: pending.workTitle,
+                          linkedin_url: pending.linkedinUrl,
+                        };
+                      }
+                    } catch (e) {}
+                  }
+                  
+                  // Create the profile
+                  const { error: createError } = await supabase
+                    .from('profiles')
+                    .insert(profileToCreate);
+                  
+                  if (createError) {
+                    alert('Failed to create profile. Please try again.');
+                    return;
+                  }
+                  
+                  localStorage.removeItem('pendingProfile');
+                  
+                  // Set state and redirect to edit profile to complete setup
+                  setStudentProfile({
+                    firstName: profileToCreate.first_name || '',
+                    lastName: profileToCreate.last_name || '',
+                    email: profileToCreate.email || '',
+                    password: '',
+                    year: profileToCreate.year || '',
+                    major: profileToCreate.major || '',
+                    school: profileToCreate.school || '',
+                    company: profileToCreate.company || '',
+                    workTitle: profileToCreate.work_title || '',
+                    linkedinUrl: profileToCreate.linkedin_url || '',
+                  });
+                  setSeatedRole(profileToCreate.role as Role);
+                  setLoginEmail('');
+                  setLoginPassword('');
+                  
+                  // If profile is incomplete, send to edit profile
+                  if (!profileToCreate.first_name || !profileToCreate.last_name) {
+                    alert('Please complete your profile.');
+                    setScreen("editProfile");
+                  } else {
+                    setScreen("role");
+                  }
                   return;
                 }
                 
@@ -4440,6 +4620,18 @@ if (screen === "studentLogin") {
             className="mt-4 rounded-2xl border px-4 py-3 text-sm font-semibold hover:bg-gray-50 disabled:opacity-50"
           >
             Continue
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setLoginEmail('');
+              setLoginPassword('');
+              setScreen("role");
+            }}
+            className="rounded-2xl border px-4 py-3 text-sm font-semibold hover:bg-gray-50"
+          >
+            Go back
           </button>
         </div>
       </div>
@@ -4564,7 +4756,13 @@ if (screen === "dashboard" && seatedRole === "student") {
   </button>
   <button
     type="button"
-    onClick={() => setScreen("role")}
+    onClick={() => {
+      if (gamePin || multiplayerActive) {
+        setShowTitleScreenConfirm(true);
+      } else {
+        setScreen("role");
+      }
+    }}
     className="rounded-xl border px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50"
   >
     Title screen
@@ -4602,7 +4800,7 @@ if (screen === "dashboard" && seatedRole === "student") {
       <span>
         {studentProfile.linkedinUrl ? (
           <a
-            href={studentProfile.linkedinUrl.startsWith('http') ? studentProfile.linkedinUrl : `https://${studentProfile.linkedinUrl}`}
+            href={studentProfile.linkedinUrl.match(/^https?:\/\/(www\.)?linkedin\.com/) ? studentProfile.linkedinUrl : `https://linkedin.com/in/`}
             target="_blank"
             rel="noopener noreferrer"
             className="text-blue-600 hover:underline"
@@ -4865,7 +5063,13 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
   </button>
   <button
     type="button"
-    onClick={() => setScreen("role")}
+    onClick={() => {
+      if (gamePin || multiplayerActive) {
+        setShowTitleScreenConfirm(true);
+      } else {
+        setScreen("role");
+      }
+    }}
     className="rounded-xl border px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50"
   >
     Title screen
@@ -5056,14 +5260,26 @@ if (screen === "connections") {
           
           <button
             type="button"
-            onClick={() => setScreen(seatedRole === "professional" ? "professionalDashboard" : "dashboard")}
+            onClick={() => {
+              if (gamePin || multiplayerActive) {
+                setShowDashboardConfirm(true);
+              } else {
+                setScreen(seatedRole === "professional" ? "professionalDashboard" : "dashboard");
+              }
+            }}
             className="rounded-xl border px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50"
           >
             Dashboard
           </button>
-          <button
+         <button
             type="button"
-            onClick={() => setScreen("role")}
+            onClick={() => {
+              if (gamePin || multiplayerActive) {
+                setShowTitleScreenConfirm(true);
+              } else {
+                setScreen("role");
+              }
+            }}
             className="rounded-xl border px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50"
           >
             Title screen
@@ -5346,15 +5562,20 @@ if (screen === "editProfile") {
                 className="rounded-xl border px-4 py-3 text-sm"
               />
 
-              <input
-                type="text"
-                placeholder="Year"
+              <select
                 value={studentProfile.year}
                 onChange={(e) =>
                   setStudentProfile({ ...studentProfile, year: e.target.value })
                 }
-                className="rounded-xl border px-4 py-3 text-sm"
-              />
+                className="w-full rounded-xl border px-4 py-3 text-sm appearance-none bg-transparent text-white cursor-pointer"
+              >
+                <option value="" disabled className="bg-black text-white">Year</option>
+                <option value="1" className="bg-black text-white">1</option>
+                <option value="2" className="bg-black text-white">2</option>
+                <option value="3" className="bg-black text-white">3</option>
+                <option value="4" className="bg-black text-white">4</option>
+                <option value="Other" className="bg-black text-white">Other</option>
+              </select>
 
               <input
                 type="text"
@@ -5433,7 +5654,7 @@ if (screen === "editProfile") {
   const dealerChipBottom =
     "absolute -top-3 -left-3 min-[1536px]:max-[1650px]:-top-2 min-[1536px]:max-[1650px]:-left-3 flex h-10 w-10 min-[1536px]:max-[1650px]:h-8 min-[1536px]:max-[1650px]:w-8 items-center justify-center rounded-full border bg-white text-[20px] min-[1536px]:max-[1650px]:text-[16px] font-bold text-black shadow-sm";
 
-  const streetLabel = streetNameFromCount(street);
+  const streetLabel = streetNameFromCount(displayStreet);
 
   const facingBetBottom = displayGame.bets[oppActualSeat] > displayGame.bets[myActualSeat];
   // Cap call amount to my remaining stack
@@ -5551,21 +5772,37 @@ const displayedHistoryBoard = viewingSnapshot
     setShowTitleScreenConfirm(false);
     setOpponentName(null);
     
-    // Cleanup multiplayer and broadcast quit
-    if (mpHost) {
-      mpHost.destroy();
+    // Cleanup multiplayer and broadcast quit - use refs for reliability
+    if (mpHostRef.current) {
+      mpHostRef.current.destroy();
       setMpHost(null);
+      mpHostRef.current = null;
     }
-    if (mpJoiner) {
-      mpJoiner.destroy();
+    if (mpJoinerRef.current) {
+      mpJoinerRef.current.destroy();
       setMpJoiner(null);
+      mpJoinerRef.current = null;
     }
+    
+    // Also broadcast quit directly via channel if game exists but controllers don't
+    if (gameId && !mpHostRef.current && !mpJoinerRef.current) {
+      const ch = supabase.channel(`game:${gameId}`);
+      ch.send({
+        type: "broadcast",
+        event: "mp",
+        payload: {
+          event: "PLAYER_QUIT",
+          sender: sbUser?.id ?? (mySeat === 'bottom' ? 'host' : 'joiner'),
+        },
+      }).catch(() => {});
+      supabase.removeChannel(ch);
+    }
+    
     setMultiplayerActive(false);
     setOpponentQuit(false);
     setPlayAgainRequested(false);
     setOpponentWantsPlayAgain(false);
-    setPlayAgainRequested(false);
-    setOpponentWantsPlayAgain(false);
+    setGameId(null);
     
     // Clear saved session so we don't reconnect
     sessionStorage.removeItem('headsup_gameId');
@@ -5597,19 +5834,37 @@ const displayedHistoryBoard = viewingSnapshot
     setShowDashboardConfirm(false);
     setOpponentName(null);
     
-    // Cleanup multiplayer and broadcast quit
-    if (mpHost) {
-      mpHost.destroy();
+    // Cleanup multiplayer and broadcast quit - use refs for reliability
+    if (mpHostRef.current) {
+      mpHostRef.current.destroy();
       setMpHost(null);
+      mpHostRef.current = null;
     }
-    if (mpJoiner) {
-      mpJoiner.destroy();
+    if (mpJoinerRef.current) {
+      mpJoinerRef.current.destroy();
       setMpJoiner(null);
+      mpJoinerRef.current = null;
     }
+    
+    // Also broadcast quit directly via channel if game exists but controllers don't
+    if (gameId && !mpHostRef.current && !mpJoinerRef.current) {
+      const ch = supabase.channel(`game:${gameId}`);
+      ch.send({
+        type: "broadcast",
+        event: "mp",
+        payload: {
+          event: "PLAYER_QUIT",
+          sender: sbUser?.id ?? (mySeat === 'bottom' ? 'host' : 'joiner'),
+        },
+      }).catch(() => {});
+      supabase.removeChannel(ch);
+    }
+    
     setMultiplayerActive(false);
     setOpponentQuit(false);
     setPlayAgainRequested(false);
     setOpponentWantsPlayAgain(false);
+    setGameId(null);
     
     // Clear saved session so we don't reconnect
     sessionStorage.removeItem('headsup_gameId');
@@ -5647,8 +5902,8 @@ const displayedHistoryBoard = viewingSnapshot
                       sender: sbUser?.id ?? 'host',
                     },
                   });
-                } else if (mpJoiner) {
-                  mpJoiner['channel'].send({
+                } else if (mpChannelRef.current) {
+                  mpChannelRef.current.send({
                     type: "broadcast",
                     event: "mp",
                     payload: {
@@ -5696,8 +5951,8 @@ const displayedHistoryBoard = viewingSnapshot
                     setLogViewOffset(0);
                     mpHost.resetGame();
                     setMpState(JSON.parse(JSON.stringify(mpHost.getState())));
-                  } else if (mpJoiner) {
-                    mpJoiner['channel'].send({
+                  } else if (mpChannelRef.current) {
+                    mpChannelRef.current.send({
                       type: "broadcast",
                       event: "mp",
                       payload: {
@@ -5754,8 +6009,16 @@ const displayedHistoryBoard = viewingSnapshot
         if (multiplayerActive && isHost && mpHost) {
           mpHost.showHand(mySeat);
           setMpState(JSON.parse(JSON.stringify(mpHost.getState())));
-        } else if (multiplayerActive && mpJoiner) {
-          mpJoiner.sendShowHand(mySeat);
+        } else if (multiplayerActive && mpChannelRef.current) {
+          mpChannelRef.current.send({
+            type: "broadcast",
+            event: "mp",
+            payload: {
+              event: "SHOW_HAND",
+              seat: mySeat,
+              sender: sbUser?.id ?? 'joiner',
+            },
+          });
         } else {
           // Single player - update local state
           if (mySeat === "top") {
@@ -5957,7 +6220,7 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
         <div>
           You:{" "}
           {viewingSnapshot ? (
-            `${cardStr(viewingSnapshot.heroCards[0])} ${cardStr(viewingSnapshot.heroCards[1])}`
+            renderActionText(`${cardStr(viewingSnapshot.heroCards[0])} ${cardStr(viewingSnapshot.heroCards[1])}`)
           ) : (
             // Current hand display - always show your cards
             youC && youD
@@ -5966,7 +6229,7 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
           )}
           {viewingSnapshot?.heroBest5 && (
             <span className="ml-2 opacity-60">
-              → {viewingSnapshot.heroBest5.map(cardStr).join(" ")}
+              → {renderActionText(viewingSnapshot.heroBest5.map(cardStr).join(" "))}
             </span>
           )}
         </div>
