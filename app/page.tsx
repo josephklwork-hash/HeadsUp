@@ -4123,6 +4123,7 @@ if (screen === "studentProfile") {
       <div className="w-full max-w-md">
         <h1 className="mb-6 text-center text-3xl font-bold">Sign up</h1>
 
+<fieldset disabled={creatingAccount} className={creatingAccount ? "opacity-50" : ""}>
 <div className="mb-6 flex gap-3">
   <button
   type="button"
@@ -4446,6 +4447,7 @@ if (screen === "studentProfile") {
             Go back
           </button>
         </div>
+</fieldset>
       </div>
     </main>
   );
