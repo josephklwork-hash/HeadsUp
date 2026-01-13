@@ -1186,6 +1186,20 @@ const [myConnections, setMyConnections] = useState<Set<string>>(new Set());
 const [pendingOutgoing, setPendingOutgoing] = useState<Set<string>>(new Set());
 const [pendingIncoming, setPendingIncoming] = useState<Map<string, string>>(new Map());
 
+// Rejection tracking state
+const [rejectionCounts, setRejectionCounts] = useState<Map<string, number>>(new Map());
+const [blockedUsers, setBlockedUsers] = useState<Set<string>>(new Set());
+const [hiddenUsers, setHiddenUsers] = useState<Set<string>>(new Set());
+
+// Reset blocked/hidden users when user changes
+useEffect(() => {
+  setBlockedUsers(new Set());
+  setHiddenUsers(new Set());
+}, [sbUser?.id]);
+
+const [showConnectConfirm, setShowConnectConfirm] = useState(false);
+const [connectConfirmUser, setConnectConfirmUser] = useState<{id: string, name: string} | null>(null);
+
 // Messages state
 const [selectedChatUser, setSelectedChatUser] = useState<{
   id: string;
@@ -1277,6 +1291,33 @@ async function sendConnectionRequest(recipientId: string, recipientName: string)
   }
 }
 
+async function handleConnectClick(recipientId: string, recipientName: string) {
+  if (!sbUser?.id) return;
+  
+  // Fetch fresh rejection count from database
+  const { data } = await supabase
+    .from('connection_attempts')
+    .select('rejection_count')
+    .eq('requester_id', sbUser.id)
+    .eq('recipient_id', recipientId)
+    .single();
+  
+  const rejectionCount = data?.rejection_count || 0;
+  
+  if (rejectionCount >= 2) {
+    setBlockedUsers(prev => new Set(prev).add(recipientId));
+    return;
+  }
+  
+  if (rejectionCount === 1) {
+    setConnectConfirmUser({ id: recipientId, name: recipientName });
+    setShowConnectConfirm(true);
+    return;
+  }
+  
+  sendConnectionRequest(recipientId, recipientName);
+}
+
 async function acceptConnection(odId: string, connectionId: string, odName: string) {
   if (!sbUser?.id) return;
   
@@ -1300,8 +1341,41 @@ async function acceptConnection(odId: string, connectionId: string, odName: stri
   }
 }
 
-async function rejectConnection(odId: string, connectionId: string) {
+async function rejectConnection(odId: string, connectionId: string, userName: string) {
   if (!sbUser?.id) return;
+  
+  // Check current rejection count and update
+  const { data: existingAttempt } = await supabase
+    .from('connection_attempts')
+    .select('rejection_count')
+    .eq('requester_id', odId)
+    .eq('recipient_id', sbUser.id)
+    .single();
+  
+  const currentCount = existingAttempt?.rejection_count || 0;
+  const newCount = currentCount + 1;
+  
+  if (existingAttempt) {
+    await supabase
+      .from('connection_attempts')
+      .update({ rejection_count: newCount })
+      .eq('requester_id', odId)
+      .eq('recipient_id', sbUser.id);
+  } else {
+    await supabase
+      .from('connection_attempts')
+      .insert({
+        requester_id: odId,
+        recipient_id: sbUser.id,
+        rejection_count: 1,
+      });
+  }
+  
+  // If rejected twice, hide this user's profile card
+  if (newCount >= 2) {
+    setHiddenUsers(prev => new Set(prev).add(odId));
+    alert(`We have hid ${userName}'s profile card permanently`);
+  }
   
   // Optimistic update
   setPendingIncoming(prev => {
@@ -1314,7 +1388,7 @@ async function rejectConnection(odId: string, connectionId: string) {
     .from('connections')
     .delete()
     .eq('id', connectionId)
-    .eq('recipient_id', sbUser.id); // Only recipient can reject
+    .eq('recipient_id', sbUser.id);
   
   if (error) {
     alert('Failed to reject: ' + error.message);
@@ -1749,6 +1823,40 @@ useEffect(() => {
       setPendingOutgoing(outgoing);
       setPendingIncoming(incoming);
     }
+    
+    // Fetch rejection counts (where I am the requester)
+    const { data: attemptsData, error: attemptsError } = await supabase
+      .from('connection_attempts')
+      .select('*')
+      .eq('requester_id', sbUser!.id);
+    
+    if (attemptsData) {
+      const counts = new Map<string, number>();
+      const blocked = new Set<string>();
+      for (const attempt of attemptsData) {
+        counts.set(attempt.recipient_id, attempt.rejection_count);
+        if (attempt.rejection_count >= 2) {
+          blocked.add(attempt.recipient_id);
+        }
+      }
+      setRejectionCounts(counts);
+      setBlockedUsers(prev => new Set([...prev, ...blocked]));
+    }
+    
+    // Fetch users I've rejected twice (to hide their profiles)
+    const { data: rejectedData } = await supabase
+      .from('connection_attempts')
+      .select('requester_id, rejection_count')
+      .eq('recipient_id', sbUser!.id)
+      .gte('rejection_count', 2);
+    
+    if (rejectedData) {
+      const hidden = new Set<string>();
+      for (const attempt of rejectedData) {
+        hidden.add(attempt.requester_id);
+      }
+      setHiddenUsers(prev => new Set([...prev, ...hidden]));
+    }
   }
   
   fetchProfiles();
@@ -1759,13 +1867,7 @@ useEffect(() => {
   if (!sbUser?.id) return;
   if (screen !== 'dashboard' && screen !== 'professionalDashboard') return;
   
-  const channel = supabase
-    .channel(`connections-realtime-${sbUser.id}`)
-    .on('postgres_changes', {
-      event: '*',
-      schema: 'public',
-      table: 'connections',
-    }, (payload: { eventType: string; new: Record<string, unknown>; old: Record<string, unknown> }) => {
+  const handleConnectionChange = (payload: { eventType: string; new: Record<string, unknown>; old: Record<string, unknown> }) => {
       const { eventType, new: newRecord, old: oldRecord } = payload;
       
       // For DELETE, use oldRecord; for INSERT/UPDATE, use newRecord
@@ -1779,7 +1881,9 @@ useEffect(() => {
       
       const isRequester = requesterId === sbUser.id;
       const isRecipient = recipientId === sbUser.id;
-      if (!isRequester && !isRecipient) return;
+      
+      // For DELETE events, payload may only have id - skip this check and refetch
+      if (eventType !== 'DELETE' && !isRequester && !isRecipient) return;
       
       const odId = isRequester ? recipientId : requesterId;
       
@@ -1808,25 +1912,81 @@ useEffect(() => {
           });
         }
       } else if (eventType === 'DELETE') {
-        // Clear from ALL states - covers both requester and recipient
-        setPendingOutgoing(prev => {
-          const next = new Set(prev);
-          next.delete(odId);
-          return next;
-        });
-        setPendingIncoming(prev => {
+        // Refetch connections since DELETE payload may not include full row data
+        (async () => {
+          const { data: connectionsData } = await supabase
+            .from('connections')
+            .select('*')
+            .or(`requester_id.eq.${sbUser.id},recipient_id.eq.${sbUser.id}`);
+          
+          const connected = new Set<string>();
+          const outgoing = new Set<string>();
+          const incoming = new Map<string, string>();
+          
+          if (connectionsData) {
+            for (const conn of connectionsData) {
+              const isRequester = conn.requester_id === sbUser.id;
+              const odId = isRequester ? conn.recipient_id : conn.requester_id;
+              
+              if (conn.status === 'accepted') {
+                connected.add(odId);
+              } else if (conn.status === 'pending') {
+                if (isRequester) {
+                  outgoing.add(odId);
+                } else {
+                  incoming.set(odId, conn.id);
+                }
+              }
+            }
+          }
+          
+          setMyConnections(connected);
+          setPendingOutgoing(outgoing);
+          setPendingIncoming(incoming);
+        })();
+      }
+    };
+  
+  const channel = supabase
+    .channel(`connections-realtime-${sbUser.id}`)
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'connections',
+    }, handleConnectionChange)
+    .subscribe();
+  
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}, [sbUser?.id, screen]);
+
+// Real-time subscription for rejection count updates
+useEffect(() => {
+  if (!sbUser?.id) return;
+  if (screen !== 'dashboard' && screen !== 'professionalDashboard') return;
+  
+  const channel = supabase
+    .channel(`connection-attempts-${sbUser.id}`)
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'connection_attempts',
+      filter: `requester_id=eq.${sbUser.id}`,
+    }, (payload) => {
+      const { eventType, new: newRecord } = payload;
+      
+      if (eventType === 'INSERT' || eventType === 'UPDATE') {
+        const record = newRecord as { recipient_id: string; rejection_count: number };
+        setRejectionCounts(prev => {
           const next = new Map(prev);
-          next.delete(odId);
-          return next;
-        });
-        setMyConnections(prev => {
-          const next = new Set(prev);
-          next.delete(odId);
+          next.set(record.recipient_id, record.rejection_count);
           return next;
         });
       }
     })
-    .subscribe();
+    .subscribe((status) => {
+    });
   
   return () => {
     supabase.removeChannel(channel);
@@ -3768,80 +3928,6 @@ useEffect(() => {
   fetchConnectedUsers();
 }, [sbUser?.id, screen]);
 
-// Real-time subscription for connection updates
-useEffect(() => {
-  if (!sbUser?.id) return;
-  if (screen !== 'dashboard' && screen !== 'professionalDashboard') return;
-  
-  const channel = supabase
-    .channel(`connections-realtime-${sbUser.id}`)
-    .on('postgres_changes', {
-      event: '*',
-      schema: 'public',
-      table: 'connections',
-    }, (payload: any) => {
-      const { eventType, new: newRecord, old: oldRecord } = payload;
-      
-      // For DELETE, use oldRecord; for INSERT/UPDATE, use newRecord
-      const record = eventType === 'DELETE' ? oldRecord : newRecord;
-      if (!record) return;
-      
-      const isRequester = record.requester_id === sbUser.id;
-      const isRecipient = record.recipient_id === sbUser.id;
-      if (!isRequester && !isRecipient) return;
-      
-      const odId = isRequester ? record.recipient_id : record.requester_id;
-      
-      if (eventType === 'INSERT') {
-        if (isRequester) {
-          setPendingOutgoing(prev => new Set(prev).add(odId));
-        } else {
-          setPendingIncoming(prev => {
-            const next = new Map(prev);
-            next.set(odId, record.id);
-            return next;
-          });
-        }
-      } else if (eventType === 'UPDATE') {
-        if (record.status === 'accepted') {
-          setMyConnections(prev => new Set(prev).add(odId));
-          setPendingOutgoing(prev => {
-            const next = new Set(prev);
-            next.delete(odId);
-            return next;
-          });
-          setPendingIncoming(prev => {
-            const next = new Map(prev);
-            next.delete(odId);
-            return next;
-          });
-        }
-      } else if (eventType === 'DELETE') {
-        // Clear from ALL states - both requester and recipient need updates
-        setPendingOutgoing(prev => {
-          const next = new Set(prev);
-          next.delete(odId);
-          return next;
-        });
-        setPendingIncoming(prev => {
-          const next = new Map(prev);
-          next.delete(odId);
-          return next;
-        });
-        setMyConnections(prev => {
-          const next = new Set(prev);
-          next.delete(odId);
-          return next;
-        });
-      }
-    })
-    .subscribe();
-  
-  return () => {
-    supabase.removeChannel(channel);
-  };
-}, [sbUser?.id, screen]);
-
 // Real-time subscription for new messages (updates badge in real-time)
 useEffect(() => {
   if (!sbUser?.id) return;
@@ -4966,7 +5052,7 @@ if (screen === "dashboard" && seatedRole === "student") {
       </span>
     </div>
 
-    {otherStudents.map((s, i) => (
+    {otherStudents.filter(s => !hiddenUsers.has(s.id)).map((s, i) => (
   <div
     key={i}
     className="w-full rounded-2xl border border-black bg-white px-5 py-4 font-semibold text-black flex items-center justify-between"
@@ -5002,16 +5088,16 @@ if (screen === "dashboard" && seatedRole === "student") {
           Accept
         </button>
         <button 
-          onClick={() => rejectConnection(s.id, pendingIncoming.get(s.id)!)}
+          onClick={() => rejectConnection(s.id, pendingIncoming.get(s.id)!, `${s.firstName} ${s.lastName}`)}
           className="rounded-xl border border-red-600 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-600 hover:bg-red-100"
         >
           Reject
         </button>
       </div>
-    ) : (
+    ) : blockedUsers.has(s.id) ? null : (
       <button 
         className={connectButtonClass}
-        onClick={() => sendConnectionRequest(s.id, `${s.firstName} ${s.lastName}`)}
+        onClick={() => handleConnectClick(s.id, `${s.firstName} ${s.lastName}`)}
       >
         Connect
       </button>
@@ -5031,7 +5117,7 @@ if (screen === "dashboard" && seatedRole === "student") {
   </button>
 
   <div className="max-h-[70vh] overflow-y-auto pr-4 flex flex-col gap-3">
-    {otherProfessionals.map((p, i) => (
+    {otherProfessionals.filter(p => !hiddenUsers.has(p.id)).map((p, i) => (
   <div
     key={i}
     className="w-full rounded-2xl border border-black bg-white px-5 py-[13px] font-semibold text-black flex items-center justify-between"
@@ -5067,16 +5153,16 @@ if (screen === "dashboard" && seatedRole === "student") {
           Accept
         </button>
         <button 
-          onClick={() => rejectConnection(p.id, pendingIncoming.get(p.id)!)}
+          onClick={() => rejectConnection(p.id, pendingIncoming.get(p.id)!, `${p.firstName} ${p.lastName}`)}
           className="rounded-xl border border-red-600 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-600 hover:bg-red-100"
         >
           Reject
         </button>
       </div>
-    ) : (
+    ) : blockedUsers.has(p.id) ? null : (
       <button 
         className={connectButtonClass}
-        onClick={() => sendConnectionRequest(p.id, `${p.firstName} ${p.lastName}`)}
+        onClick={() => handleConnectClick(p.id, `${p.firstName} ${p.lastName}`)}
       >
         Connect
       </button>
@@ -5092,6 +5178,26 @@ if (screen === "dashboard" && seatedRole === "student") {
 
         </div>
       </div>
+
+<ConfirmModal
+  open={showConnectConfirm}
+  title="Send connection request?"
+  message={`This user has previously declined your connection request. Would you like to send another request to ${connectConfirmUser?.name || 'this user'}?`}
+  cancelText="Go back"
+  confirmText="Send request"
+  onCancel={() => {
+    setShowConnectConfirm(false);
+    setConnectConfirmUser(null);
+  }}
+  onConfirm={() => {
+    if (connectConfirmUser) {
+      sendConnectionRequest(connectConfirmUser.id, connectConfirmUser.name);
+    }
+    setShowConnectConfirm(false);
+    setConnectConfirmUser(null);
+  }}
+/>
+
     </main>
   );
 }
@@ -5275,7 +5381,7 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
       </span>
     </div>
 
-    {otherProfessionals.map((p, i) => (
+    {otherProfessionals.filter(p => !hiddenUsers.has(p.id)).map((p, i) => (
   <div
     key={i}
     className="w-full rounded-2xl border border-black bg-white px-5 py-[14px] font-semibold text-black flex items-center justify-between"
@@ -5311,16 +5417,16 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
           Accept
         </button>
         <button 
-          onClick={() => rejectConnection(p.id, pendingIncoming.get(p.id)!)}
+          onClick={() => rejectConnection(p.id, pendingIncoming.get(p.id)!, `${p.firstName} ${p.lastName}`)}
           className="rounded-xl border border-red-600 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-600 hover:bg-red-100"
         >
           Reject
         </button>
       </div>
-    ) : (
+    ) : blockedUsers.has(p.id) ? null : (
       <button 
         className={connectButtonClass}
-        onClick={() => sendConnectionRequest(p.id, `${p.firstName} ${p.lastName}`)}
+        onClick={() => handleConnectClick(p.id, `${p.firstName} ${p.lastName}`)}
       >
         Connect
       </button>
@@ -5340,7 +5446,7 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
   </button>
 
   <div className="max-h-[70vh] overflow-y-auto pr-2 flex flex-col gap-3">
-    {otherStudents.map((s, i) => (
+    {otherStudents.filter(s => !hiddenUsers.has(s.id)).map((s, i) => (
   <div
     key={i}
     className="w-full rounded-2xl border border-black bg-white px-5 py-[13px] font-semibold text-black flex items-center justify-between"
@@ -5376,16 +5482,16 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
           Accept
         </button>
         <button 
-          onClick={() => rejectConnection(s.id, pendingIncoming.get(s.id)!)}
+          onClick={() => rejectConnection(s.id, pendingIncoming.get(s.id)!, `${s.firstName} ${s.lastName}`)}
           className="rounded-xl border border-red-600 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-600 hover:bg-red-100"
         >
           Reject
         </button>
       </div>
-    ) : (
+    ) : blockedUsers.has(s.id) ? null : (
       <button 
         className={connectButtonClass}
-        onClick={() => sendConnectionRequest(s.id, `${s.firstName} ${s.lastName}`)}
+        onClick={() => handleConnectClick(s.id, `${s.firstName} ${s.lastName}`)}
       >
         Connect
       </button>
@@ -5400,6 +5506,26 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
 
         </div>
       </div>
+
+<ConfirmModal
+  open={showConnectConfirm}
+  title="Send connection request?"
+  message={`This user has previously declined your connection request. Would you like to send another request to ${connectConfirmUser?.name || 'this user'}?`}
+  cancelText="Go back"
+  confirmText="Send request"
+  onCancel={() => {
+    setShowConnectConfirm(false);
+    setConnectConfirmUser(null);
+  }}
+  onConfirm={() => {
+    if (connectConfirmUser) {
+      sendConnectionRequest(connectConfirmUser.id, connectConfirmUser.name);
+    }
+    setShowConnectConfirm(false);
+    setConnectConfirmUser(null);
+  }}
+/>
+
     </main>
   );
 }
