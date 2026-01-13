@@ -1070,7 +1070,23 @@ const setStreetBettor = (next: any) =>
   const [handLogHistory, setHandLogHistory] = useState<HandLogSnapshot[]>([]);
   const [logViewOffset, setLogViewOffset] = useState(0);
 
-  const [screen, setScreen] = useState<Screen>("role");
+  const [screen, setScreen] = useState<Screen>(() => {
+  if (typeof window !== 'undefined') {
+    const saved = sessionStorage.getItem('headsup_screen');
+    if (saved && ['role', 'studentProfile', 'studentLogin', 'dashboard', 'professionalDashboard', 'editProfile', 'connections', 'game'].includes(saved)) {
+      return saved as Screen;
+    }
+  }
+  return "role";
+});
+
+  // Save screen to sessionStorage when it changes
+useEffect(() => {
+  if (screen) {
+    sessionStorage.setItem('headsup_screen', screen);
+  }
+}, [screen]);
+
   const [gamePin, setGamePin] = useState<string | null>(null);
   const [joinMode, setJoinMode] = useState(false);
   const [joinPinInput, setJoinPinInput] = useState("");
@@ -1737,6 +1753,8 @@ useEffect(() => {
   
   fetchProfiles();
 }, [sbUser?.id, screen]);
+
+
 
 // Check for active game session on mount (reconnection logic)
 useEffect(() => {
@@ -3673,6 +3691,78 @@ useEffect(() => {
   fetchConnectedUsers();
 }, [sbUser?.id, screen]);
 
+// Real-time subscription for connection updates
+useEffect(() => {
+  if (!sbUser?.id) return;
+  if (screen !== 'dashboard' && screen !== 'professionalDashboard') return;
+  
+  const channel = supabase
+    .channel(`connections-realtime-${sbUser.id}`)
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'connections',
+      filter: `recipient_id=eq.${sbUser.id}`,
+    }, (payload) => {
+      const conn = payload.new as any;
+      
+      if (payload.eventType === 'INSERT' && conn.status === 'pending') {
+        // Someone sent us a connection request
+        setPendingIncoming(prev => {
+          const next = new Map(prev);
+          next.set(conn.requester_id, conn.id);
+          return next;
+        });
+      } else if (payload.eventType === 'UPDATE' && conn.status === 'accepted') {
+        // Connection was accepted
+        setMyConnections(prev => new Set(prev).add(conn.requester_id));
+        setPendingIncoming(prev => {
+          const next = new Map(prev);
+          next.delete(conn.requester_id);
+          return next;
+        });
+      } else if (payload.eventType === 'DELETE') {
+        // Connection was deleted/rejected
+        const oldConn = payload.old as any;
+        setPendingIncoming(prev => {
+          const next = new Map(prev);
+          next.delete(oldConn.requester_id);
+          return next;
+        });
+      }
+    })
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'connections',
+      filter: `requester_id=eq.${sbUser.id}`,
+    }, (payload) => {
+      const conn = payload.new as any;
+      
+      if (payload.eventType === 'UPDATE' && conn.status === 'accepted') {
+        // Our request was accepted
+        setMyConnections(prev => new Set(prev).add(conn.recipient_id));
+        setPendingOutgoing(prev => {
+          const next = new Set(prev);
+          next.delete(conn.recipient_id);
+          return next;
+        });
+      } else if (payload.eventType === 'UPDATE' && conn.status === 'rejected') {
+        // Our request was rejected
+        setPendingOutgoing(prev => {
+          const next = new Set(prev);
+          next.delete(conn.recipient_id);
+          return next;
+        });
+      }
+    })
+    .subscribe();
+  
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}, [sbUser?.id, screen]);
+
 // Real-time subscription for new messages (updates badge in real-time)
 useEffect(() => {
   if (!sbUser?.id) return;
@@ -5447,6 +5537,9 @@ if (screen === "connections") {
   /* ---------- edit profile ---------- */
 
 if (screen === "editProfile") {
+  const inputClass = "rounded-xl border border-white text-white placeholder:text-white/50 bg-transparent px-4 py-3 text-sm";
+  const buttonClass = "rounded-2xl border border-white text-white px-4 py-3 text-sm font-semibold transition-colors hover:bg-gray-50 hover:text-black";
+  
   const handleSaveProfile = async () => {
     if (!sbUser?.id) return;
     
@@ -5513,7 +5606,7 @@ if (screen === "editProfile") {
   return (
     <main className="relative flex min-h-screen items-center justify-center bg-black px-6">
       <div className="w-full max-w-md">
-        <h1 className="mb-6 text-center text-3xl font-bold">Edit Profile</h1>
+        <h1 className="mb-6 text-center text-3xl font-bold text-white">Edit Profile</h1>
 
         <div className="flex flex-col gap-4">
           <input
@@ -5523,7 +5616,7 @@ if (screen === "editProfile") {
             onChange={(e) =>
               setStudentProfile({ ...studentProfile, firstName: e.target.value })
             }
-            className="rounded-xl border px-4 py-3 text-sm"
+            className={inputClass}
           />
 
           <input
@@ -5533,7 +5626,7 @@ if (screen === "editProfile") {
             onChange={(e) =>
               setStudentProfile({ ...studentProfile, lastName: e.target.value })
             }
-            className="rounded-xl border px-4 py-3 text-sm"
+            className={inputClass}
           />
 
           <input
@@ -5543,7 +5636,7 @@ if (screen === "editProfile") {
             onChange={(e) =>
               setStudentProfile({ ...studentProfile, linkedinUrl: e.target.value })
             }
-            className="rounded-xl border px-4 py-3 text-sm"
+            className={inputClass}
           />
 
           {seatedRole === "student" && (
@@ -5555,7 +5648,7 @@ if (screen === "editProfile") {
                 onChange={(e) =>
                   setStudentProfile({ ...studentProfile, school: e.target.value })
                 }
-                className="rounded-xl border px-4 py-3 text-sm"
+                className={inputClass}
               />
 
               <select
@@ -5563,7 +5656,7 @@ if (screen === "editProfile") {
                 onChange={(e) =>
                   setStudentProfile({ ...studentProfile, year: e.target.value })
                 }
-                className="w-full rounded-xl border px-4 py-3 text-sm appearance-none bg-transparent text-white cursor-pointer"
+                className="w-full rounded-xl border border-white px-4 py-3 text-sm appearance-none bg-transparent text-white cursor-pointer"
               >
                 <option value="" disabled className="bg-black text-white">Year</option>
                 <option value="1" className="bg-black text-white">1</option>
@@ -5580,7 +5673,7 @@ if (screen === "editProfile") {
                 onChange={(e) =>
                   setStudentProfile({ ...studentProfile, major: e.target.value })
                 }
-                className="rounded-xl border px-4 py-3 text-sm"
+                className={inputClass}
               />
             </>
           )}
@@ -5594,7 +5687,7 @@ if (screen === "editProfile") {
                 onChange={(e) =>
                   setStudentProfile({ ...studentProfile, school: e.target.value })
                 }
-                className="rounded-xl border px-4 py-3 text-sm"
+                className={inputClass}
               />
 
               <input
@@ -5604,7 +5697,7 @@ if (screen === "editProfile") {
                 onChange={(e) =>
                   setStudentProfile({ ...studentProfile, company: e.target.value })
                 }
-                className="rounded-xl border px-4 py-3 text-sm"
+                className={inputClass}
               />
 
               <input
@@ -5614,7 +5707,7 @@ if (screen === "editProfile") {
                 onChange={(e) =>
                   setStudentProfile({ ...studentProfile, workTitle: e.target.value })
                 }
-                className="rounded-xl border px-4 py-3 text-sm"
+                className={inputClass}
               />
             </>
           )}
@@ -5623,7 +5716,7 @@ if (screen === "editProfile") {
             type="button"
             onClick={handleSaveProfile}
             disabled={savingProfile}
-            className="mt-4 rounded-2xl border px-4 py-3 text-sm font-semibold transition-colors hover:bg-gray-50 disabled:opacity-50"
+            className={`mt-4 ${buttonClass} disabled:opacity-50`}
           >
             {savingProfile ? 'Saving...' : 'Save Changes'}
           </button>
@@ -5631,7 +5724,7 @@ if (screen === "editProfile") {
           <button
             type="button"
             onClick={() => setScreen(seatedRole === 'professional' ? 'professionalDashboard' : 'dashboard')}
-            className="rounded-2xl border px-4 py-3 text-sm font-semibold transition-colors hover:bg-gray-50"
+            className={buttonClass}
           >
             Cancel
           </button>
