@@ -5330,7 +5330,7 @@ if (screen === "connections") {
     <main className="flex h-screen justify-center bg-black px-6 py-6 overflow-hidden">
       <div className="w-full max-w-[96rem] flex flex-col">
         <div className="mb-4 flex items-center justify-center gap-4 shrink-0">
-          <h1 className="text-3xl font-bold">Connections</h1>
+          <h1 className="text-3xl font-bold text-white">Connections</h1>
           
           <button
             type="button"
@@ -5341,7 +5341,7 @@ if (screen === "connections") {
                 setScreen(seatedRole === "professional" ? "professionalDashboard" : "dashboard");
               }
             }}
-            className="rounded-xl border px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50"
+            className="rounded-xl border border-white text-white px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50 hover:text-black"
           >
             Dashboard
           </button>
@@ -5354,7 +5354,7 @@ if (screen === "connections") {
                 setScreen("role");
               }
             }}
-            className="rounded-xl border px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50"
+            className="rounded-xl border border-white text-white px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50 hover:text-black"
           >
             Title screen
           </button>
