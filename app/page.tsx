@@ -1754,7 +1754,99 @@ useEffect(() => {
   fetchProfiles();
 }, [sbUser?.id, screen]);
 
-
+// Real-time subscription for connection updates
+useEffect(() => {
+  if (!sbUser?.id) return;
+  if (screen !== 'dashboard' && screen !== 'professionalDashboard') return;
+  
+  const channel = supabase
+    .channel(`connections-${sbUser.id}`)
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'connections',
+    }, (payload) => {
+      const conn = payload.new as any;
+      const oldConn = payload.old as any;
+      
+      // Determine if this change involves the current user
+      const isMyConnection = 
+        conn?.requester_id === sbUser.id || 
+        conn?.recipient_id === sbUser.id ||
+        oldConn?.requester_id === sbUser.id ||
+        oldConn?.recipient_id === sbUser.id;
+      
+      if (!isMyConnection) return;
+      
+      if (payload.eventType === 'INSERT') {
+        // New connection request
+        const isRequester = conn.requester_id === sbUser.id;
+        const odId = isRequester ? conn.recipient_id : conn.requester_id;
+        
+        if (conn.status === 'pending') {
+          if (isRequester) {
+            setPendingOutgoing(prev => new Set(prev).add(odId));
+          } else {
+            setPendingIncoming(prev => new Map(prev).set(odId, conn.id));
+          }
+        }
+      } else if (payload.eventType === 'UPDATE') {
+        // Connection status changed
+        const isRequester = conn.requester_id === sbUser.id;
+        const odId = isRequester ? conn.recipient_id : conn.requester_id;
+        
+        if (conn.status === 'accepted') {
+          // Move from pending to connected
+          setMyConnections(prev => new Set(prev).add(odId));
+          setPendingOutgoing(prev => {
+            const next = new Set(prev);
+            next.delete(odId);
+            return next;
+          });
+          setPendingIncoming(prev => {
+            const next = new Map(prev);
+            next.delete(odId);
+            return next;
+          });
+        } else if (conn.status === 'rejected') {
+          // Remove from pending
+          setPendingOutgoing(prev => {
+            const next = new Set(prev);
+            next.delete(odId);
+            return next;
+          });
+          setPendingIncoming(prev => {
+            const next = new Map(prev);
+            next.delete(odId);
+            return next;
+          });
+        }
+      } else if (payload.eventType === 'DELETE') {
+        // Connection removed
+        const odId = oldConn.requester_id === sbUser.id ? oldConn.recipient_id : oldConn.requester_id;
+        setMyConnections(prev => {
+          const next = new Set(prev);
+          next.delete(odId);
+          return next;
+        });
+        setPendingOutgoing(prev => {
+          const next = new Set(prev);
+          next.delete(odId);
+          return next;
+        });
+        setPendingIncoming(prev => {
+          const next = new Map(prev);
+          next.delete(odId);
+          return next;
+        });
+      }
+    })
+    .subscribe();
+  
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}, [sbUser?.id, screen]);
 
 // Check for active game session on mount (reconnection logic)
 useEffect(() => {
