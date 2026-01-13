@@ -1177,7 +1177,7 @@ const [showLoginPassword, setShowLoginPassword] = useState(false);
 
 const [studentMenuOpen, setStudentMenuOpen] = useState(false);
 
-const [otherStudents, setOtherStudents] = useState<{ id: string; firstName: string; lastName: string; year: string; major: string; linkedinUrl: string | null }[]>([]);
+const [otherStudents, setOtherStudents] = useState<{ id: string; firstName: string; lastName: string; year: string; major: string; school: string; linkedinUrl: string | null }[]>([]);
 
 const [otherProfessionals, setOtherProfessionals] = useState<{ id: string; firstName: string; lastName: string; company: string; workTitle: string; linkedinUrl: string | null }[]>([]);
 
@@ -1778,6 +1778,7 @@ useEffect(() => {
         lastName: p.last_name,
         year: p.year || '',
         major: p.major || '',
+        school: p.school || '',
         linkedinUrl: p.linkedin_url || null,
       })));
     }
@@ -5072,7 +5073,8 @@ if (screen === "dashboard" && seatedRole === "student") {
       )}
       {" • "}
       {s.year} {" • "}
-      {s.major}
+      {s.major} {" • "}
+      {s.school}
     </span>
 
     {myConnections.has(s.id) ? (
@@ -5466,7 +5468,8 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
       )}
       {" • "}
       {s.year} {" • "}
-      {s.major}
+      {s.major} {" • "}
+      {s.school}
     </span>
 
     {myConnections.has(s.id) ? (
