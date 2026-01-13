@@ -1091,6 +1091,13 @@ useEffect(() => {
   const [joinMode, setJoinMode] = useState(false);
   const [joinPinInput, setJoinPinInput] = useState("");
   const [isGuestBrowsing, setIsGuestBrowsing] = useState(false);
+  const [showFounderConnectModal, setShowFounderConnectModal] = useState(false);
+  const [founderConnectForm, setFounderConnectForm] = useState({ name: '', email: '' });
+  const [founderConnectSubmitting, setFounderConnectSubmitting] = useState(false);
+  const [founderConnectSent, setFounderConnectSent] = useState(false);
+
+// Your user ID (founder) - guests can connect with you
+const FOUNDER_ID = 'cec95997-2f5d-4836-8fc0-c4978d0ca231';
   const [creatingGame, setCreatingGame] = useState(false);
   const [creatingAccount, setCreatingAccount] = useState(false);
   const [editProfileReturnScreen, setEditProfileReturnScreen] = useState<Screen>("role");
@@ -1781,7 +1788,7 @@ useEffect(() => {
     const { data: professionals } = await professionalsQuery;
     
     if (students) {
-      setOtherStudents(students.map(p => ({
+      const mappedStudents = students.map(p => ({
         id: p.id,
         firstName: p.first_name,
         lastName: p.last_name,
@@ -1789,7 +1796,18 @@ useEffect(() => {
         major: p.major || '',
         school: p.school || '',
         linkedinUrl: p.linkedin_url || null,
-      })));
+      }));
+      
+      // Sort founder to top for guest browsing
+      if (isGuestBrowsing) {
+        mappedStudents.sort((a, b) => {
+          if (a.id === FOUNDER_ID) return -1;
+          if (b.id === FOUNDER_ID) return 1;
+          return 0;
+        });
+      }
+      
+      setOtherStudents(mappedStudents);
     }
     
     if (professionals) {
@@ -4909,6 +4927,99 @@ if (screen === "dashboard" && (seatedRole === "student" || isGuestBrowsing)) {
 
   return (
    <main className="flex min-h-screen justify-center bg-black px-6 pt-16 min-[1536px]:max-[1650px]:scale-[0.85] min-[1536px]:max-[1650px]:origin-center">
+  
+  {/* Founder Connect Modal for guest users */}
+  {showFounderConnectModal && (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-6">
+      <div className="absolute inset-0 bg-black/50" onClick={() => setShowFounderConnectModal(false)} />
+      <div className="relative w-full max-w-md rounded-3xl border border-gray-300 bg-white p-6 shadow-lg">
+        <h3 className="mb-2 text-xl font-bold text-gray-900">Hey! 👋</h3>
+        <p className="mb-4 text-sm text-gray-700">
+          I'm Joseph, the founder of HeadsUp. Thanks for exploring the community!
+        </p>
+        <p className="mb-6 text-sm text-gray-700">
+          I'd love to connect with you personally. Drop your name and email below, and I'll reach out soon.
+        </p>
+        
+        <div className="flex flex-col gap-4">
+          <input
+            type="text"
+            placeholder="What should I call you?"
+            value={founderConnectForm.name}
+            onChange={(e) => setFounderConnectForm(prev => ({ ...prev, name: e.target.value }))}
+            className="rounded-xl border border-gray-300 px-4 py-3 text-sm text-black placeholder:text-gray-400"
+          />
+          
+          <input
+            type="email"
+            placeholder="Your email"
+            value={founderConnectForm.email}
+            onChange={(e) => setFounderConnectForm(prev => ({ ...prev, email: e.target.value }))}
+            onKeyDown={async (e) => {
+              if (e.key === 'Enter' && founderConnectForm.name && founderConnectForm.email) {
+                const nameValidation = validateInput(founderConnectForm.name, 'name', { required: true });
+                if (!nameValidation.valid) { alert(nameValidation.error); return; }
+                const emailValidation = validateEmail(founderConnectForm.email);
+                if (!emailValidation.valid) { alert(emailValidation.error); return; }
+                setFounderConnectSubmitting(true);
+                try {
+                  const { error } = await supabase.from('founder_contact_requests').insert({ name: nameValidation.sanitized, email: emailValidation.sanitized });
+if (error) { alert('Something went wrong. Please try again.'); return; }
+fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/send-founder-contact-email`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ name: nameValidation.sanitized, email: emailValidation.sanitized }),
+}).catch(() => {});
+alert("Thanks! I'll reach out to you soon. – Joseph");
+                  setFounderConnectSent(true);
+                  setShowFounderConnectModal(false);
+                  setFounderConnectForm({ name: '', email: '' });
+                } catch (e) { alert('Something went wrong. Please try again.'); }
+                finally { setFounderConnectSubmitting(false); }
+              }
+            }}
+            className="rounded-xl border border-gray-300 px-4 py-3 text-sm text-black placeholder:text-gray-400"
+          />
+        </div>
+        
+        <div className="mt-6 flex justify-end gap-3">
+          <button
+            onClick={() => setShowFounderConnectModal(false)}
+            className="rounded-2xl border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-100"
+          >
+            Maybe later
+          </button>
+          <button
+            onClick={async () => {
+              const nameValidation = validateInput(founderConnectForm.name, 'name', { required: true });
+              if (!nameValidation.valid) { alert(nameValidation.error); return; }
+              const emailValidation = validateEmail(founderConnectForm.email);
+              if (!emailValidation.valid) { alert(emailValidation.error); return; }
+              setFounderConnectSubmitting(true);
+              try {
+                const { error } = await supabase.from('founder_contact_requests').insert({ name: nameValidation.sanitized, email: emailValidation.sanitized });
+if (error) { alert('Something went wrong. Please try again.'); return; }
+fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/send-founder-contact-email`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ name: nameValidation.sanitized, email: emailValidation.sanitized }),
+}).catch(() => {});
+alert("Thanks! I'll reach out to you soon. – Joseph");
+                setFounderConnectSent(true);
+                setShowFounderConnectModal(false);
+                setFounderConnectForm({ name: '', email: '' });
+              } catch (e) { alert('Something went wrong. Please try again.'); }
+              finally { setFounderConnectSubmitting(false); }
+            }}
+            disabled={founderConnectSubmitting || !founderConnectForm.name || !founderConnectForm.email}
+            className="rounded-2xl border border-black bg-black px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-gray-800 disabled:opacity-50"
+          >
+            {founderConnectSubmitting ? 'Sending...' : 'Connect with Joseph'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )}
   <div className="w-full max-w-[96rem]">
        <div className="mb-2 flex items-center justify-center gap-4">
   <h1 className="text-3xl font-bold text-white">
@@ -5135,32 +5246,48 @@ if (screen === "dashboard" && (seatedRole === "student" || isGuestBrowsing)) {
       {s.major}{s.school ? ` • ${s.school}` : ''}
     </span>
 
-    {isGuestBrowsing ? null : myConnections.has(s.id) ? (
-      <span className="text-sm text-green-600 font-semibold">Connected</span>
-    ) : pendingOutgoing.has(s.id) ? (
-      <span className="text-sm text-gray-500">Pending</span>
-    ) : pendingIncoming.has(s.id) ? (
-      <div className="flex gap-2">
+    {/* Show connect button for founder when guest browsing */}
+    {isGuestBrowsing && s.id === FOUNDER_ID && (
+      founderConnectSent ? (
+        <span className="text-sm text-gray-500">Pending</span>
+      ) : (
         <button 
-          onClick={() => acceptConnection(s.id, pendingIncoming.get(s.id)!, `${s.firstName} ${s.lastName}`)}
-          className="rounded-xl border border-green-600 bg-green-50 px-3 py-1.5 text-sm font-semibold text-green-600 hover:bg-green-100"
+          className={connectButtonClass}
+          onClick={() => setShowFounderConnectModal(true)}
         >
-          Accept
+          Connect
         </button>
+      )
+    )}
+    {/* Hide all buttons for guests (except founder above) */}
+    {!isGuestBrowsing && (
+      myConnections.has(s.id) ? (
+        <span className="text-sm text-green-600 font-semibold">Connected</span>
+      ) : pendingOutgoing.has(s.id) ? (
+        <span className="text-sm text-gray-500">Pending</span>
+      ) : pendingIncoming.has(s.id) ? (
+        <div className="flex gap-2">
+          <button 
+            onClick={() => acceptConnection(s.id, pendingIncoming.get(s.id)!, `${s.firstName} ${s.lastName}`)}
+            className="rounded-xl border border-green-600 bg-green-50 px-3 py-1.5 text-sm font-semibold text-green-600 hover:bg-green-100"
+          >
+            Accept
+          </button>
+          <button 
+            onClick={() => rejectConnection(s.id, pendingIncoming.get(s.id)!, `${s.firstName} ${s.lastName}`)}
+            className="rounded-xl border border-red-600 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-600 hover:bg-red-100"
+          >
+            Reject
+          </button>
+        </div>
+      ) : blockedUsers.has(s.id) ? null : (
         <button 
-          onClick={() => rejectConnection(s.id, pendingIncoming.get(s.id)!, `${s.firstName} ${s.lastName}`)}
-          className="rounded-xl border border-red-600 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-600 hover:bg-red-100"
+          className={connectButtonClass}
+          onClick={() => handleConnectClick(s.id, `${s.firstName} ${s.lastName}`)}
         >
-          Reject
+          Connect
         </button>
-      </div>
-    ) : blockedUsers.has(s.id) ? null : (
-      <button 
-        className={connectButtonClass}
-        onClick={() => handleConnectClick(s.id, `${s.firstName} ${s.lastName}`)}
-      >
-        Connect
-      </button>
+      )
     )}
   </div>
 ))}
