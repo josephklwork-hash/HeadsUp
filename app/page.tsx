@@ -5073,8 +5073,7 @@ if (screen === "dashboard" && seatedRole === "student") {
       )}
       {" • "}
       {s.year} {" • "}
-      {s.major} {" • "}
-      {s.school}
+      {s.major}{s.school ? ` • ${s.school}` : ''}
     </span>
 
     {myConnections.has(s.id) ? (
@@ -5468,8 +5467,7 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
       )}
       {" • "}
       {s.year} {" • "}
-      {s.major} {" • "}
-      {s.school}
+      {s.major}{s.school ? ` • ${s.school}` : ''}
     </span>
 
     {myConnections.has(s.id) ? (
