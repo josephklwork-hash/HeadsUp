@@ -3779,56 +3779,58 @@ useEffect(() => {
       event: '*',
       schema: 'public',
       table: 'connections',
-      filter: `recipient_id=eq.${sbUser.id}`,
-    }, (payload) => {
-      const conn = payload.new as any;
+    }, (payload: any) => {
+      const { eventType, new: newRecord, old: oldRecord } = payload;
       
-      if (payload.eventType === 'INSERT' && conn.status === 'pending') {
-        // Someone sent us a connection request
-        setPendingIncoming(prev => {
-          const next = new Map(prev);
-          next.set(conn.requester_id, conn.id);
-          return next;
-        });
-      } else if (payload.eventType === 'UPDATE' && conn.status === 'accepted') {
-        // Connection was accepted
-        setMyConnections(prev => new Set(prev).add(conn.requester_id));
-        setPendingIncoming(prev => {
-          const next = new Map(prev);
-          next.delete(conn.requester_id);
-          return next;
-        });
-      } else if (payload.eventType === 'DELETE') {
-        // Connection was deleted/rejected
-        const oldConn = payload.old as any;
-        setPendingIncoming(prev => {
-          const next = new Map(prev);
-          next.delete(oldConn.requester_id);
-          return next;
-        });
-      }
-    })
-    .on('postgres_changes', {
-      event: '*',
-      schema: 'public',
-      table: 'connections',
-      filter: `requester_id=eq.${sbUser.id}`,
-    }, (payload) => {
-      const conn = payload.new as any;
+      // For DELETE, use oldRecord; for INSERT/UPDATE, use newRecord
+      const record = eventType === 'DELETE' ? oldRecord : newRecord;
+      if (!record) return;
       
-      if (payload.eventType === 'UPDATE' && conn.status === 'accepted') {
-        // Our request was accepted
-        setMyConnections(prev => new Set(prev).add(conn.recipient_id));
+      const isRequester = record.requester_id === sbUser.id;
+      const isRecipient = record.recipient_id === sbUser.id;
+      if (!isRequester && !isRecipient) return;
+      
+      const odId = isRequester ? record.recipient_id : record.requester_id;
+      
+      if (eventType === 'INSERT') {
+        if (isRequester) {
+          setPendingOutgoing(prev => new Set(prev).add(odId));
+        } else {
+          setPendingIncoming(prev => {
+            const next = new Map(prev);
+            next.set(odId, record.id);
+            return next;
+          });
+        }
+      } else if (eventType === 'UPDATE') {
+        if (record.status === 'accepted') {
+          setMyConnections(prev => new Set(prev).add(odId));
+          setPendingOutgoing(prev => {
+            const next = new Set(prev);
+            next.delete(odId);
+            return next;
+          });
+          setPendingIncoming(prev => {
+            const next = new Map(prev);
+            next.delete(odId);
+            return next;
+          });
+        }
+      } else if (eventType === 'DELETE') {
+        // Clear from ALL states - both requester and recipient need updates
         setPendingOutgoing(prev => {
           const next = new Set(prev);
-          next.delete(conn.recipient_id);
+          next.delete(odId);
           return next;
         });
-      } else if (payload.eventType === 'UPDATE' && conn.status === 'rejected') {
-        // Our request was rejected
-        setPendingOutgoing(prev => {
+        setPendingIncoming(prev => {
+          const next = new Map(prev);
+          next.delete(odId);
+          return next;
+        });
+        setMyConnections(prev => {
           const next = new Set(prev);
-          next.delete(conn.recipient_id);
+          next.delete(odId);
           return next;
         });
       }
