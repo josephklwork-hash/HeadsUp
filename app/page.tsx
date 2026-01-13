@@ -1312,7 +1312,7 @@ async function rejectConnection(odId: string, connectionId: string) {
   
   const { error } = await supabase
     .from('connections')
-    .update({ status: 'rejected' })
+    .delete()
     .eq('id', connectionId)
     .eq('recipient_id', sbUser.id); // Only recipient can reject
   
