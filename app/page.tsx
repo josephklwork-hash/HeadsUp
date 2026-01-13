@@ -5049,7 +5049,7 @@ if (screen === "dashboard" && seatedRole === "student") {
         )}
         {" • "}
         {studentProfile.year} {" • "}
-        {studentProfile.major}
+        {studentProfile.major} {studentProfile.school ? ` • ${studentProfile.school}` : ''}
       </span>
     </div>
 
