@@ -1090,6 +1090,7 @@ useEffect(() => {
   const [gamePin, setGamePin] = useState<string | null>(null);
   const [joinMode, setJoinMode] = useState(false);
   const [joinPinInput, setJoinPinInput] = useState("");
+  const [isGuestBrowsing, setIsGuestBrowsing] = useState(false);
   const [creatingGame, setCreatingGame] = useState(false);
   const [creatingAccount, setCreatingAccount] = useState(false);
   const [editProfileReturnScreen, setEditProfileReturnScreen] = useState<Screen>("role");
@@ -1751,25 +1752,33 @@ useEffect(() => {
 
 // Fetch other users for dashboard
 useEffect(() => {
-  if (!sbUser?.id) return;
+  if (!sbUser?.id && !isGuestBrowsing) return;
   if (screen !== 'dashboard' && screen !== 'professionalDashboard') return;
   
   async function fetchProfiles() {
-    const { data: students } = await supabase
+    // Build query - exclude own ID only if logged in
+    let studentsQuery = supabase
       .from('public_profiles')
       .select('*')
       .eq('role', 'student')
-      .neq('id', sbUser!.id)
       .order('created_at', { ascending: false })
       .limit(50);
     
-    const { data: professionals } = await supabase
+    let professionalsQuery = supabase
       .from('public_profiles')
       .select('*')
       .eq('role', 'professional')
-      .neq('id', sbUser!.id)
       .order('created_at', { ascending: false })
       .limit(50);
+    
+    // Exclude own profile only if logged in
+    if (sbUser?.id) {
+      studentsQuery = studentsQuery.neq('id', sbUser.id);
+      professionalsQuery = professionalsQuery.neq('id', sbUser.id);
+    }
+    
+    const { data: students } = await studentsQuery;
+    const { data: professionals } = await professionalsQuery;
     
     if (students) {
       setOtherStudents(students.map(p => ({
@@ -1794,7 +1803,9 @@ useEffect(() => {
       })));
     }
     
-    // Fetch connections
+    // Fetch connections (skip for guest browsing)
+    if (!sbUser?.id) return;
+    
     const { data: connectionsData } = await supabase
       .from('connections')
       .select('*')
@@ -1861,7 +1872,7 @@ useEffect(() => {
   }
   
   fetchProfiles();
-}, [sbUser?.id, screen]);
+}, [sbUser?.id, screen, isGuestBrowsing]);
 
 // Real-time subscription for connection updates
 useEffect(() => {
@@ -4290,6 +4301,17 @@ const joinGame = () => {
       >
         Sign up
       </button>
+
+      <button
+        type="button"
+        onClick={() => {
+          setIsGuestBrowsing(true);
+          setScreen("dashboard");
+        }}
+        className="text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-white underline opacity-80 hover:opacity-100"
+      >
+        Explore
+      </button>
     </>
   ) : null
 )}
@@ -4875,7 +4897,7 @@ if (screen === "studentLogin") {
 
 /* ---------- student dashboard ---------- */
 
-if (screen === "dashboard" && seatedRole === "student") {
+if (screen === "dashboard" && (seatedRole === "student" || isGuestBrowsing)) {
   const baseButton =
     "w-full rounded-3xl border px-6 font-semibold transition-colors duration-200 hover:bg-gray-50 hover:border-gray-300";
 
@@ -4883,127 +4905,156 @@ if (screen === "dashboard" && seatedRole === "student") {
    <main className="flex min-h-screen justify-center bg-black px-6 pt-16 min-[1536px]:max-[1650px]:scale-[0.85] min-[1536px]:max-[1650px]:origin-center">
   <div className="w-full max-w-[96rem]">
        <div className="mb-2 flex items-center justify-center gap-4">
-  <h1 className="text-3xl font-bold text-white">Student dashboard</h1>
+  <h1 className="text-3xl font-bold text-white">
+    {isGuestBrowsing ? "Explore the community" : "Student dashboard"}
+  </h1>
 
-  <button
-    type="button"
-    onClick={() => {
-      setEditProfileReturnScreen("dashboard");
-      setScreen("editProfile");
-    }}
-    className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black"
-  >
-    Edit Profile
-  </button>
-
-  {/* Game PIN display */}
-  {gamePin && !joinMode && (
-    <div className="flex items-center gap-2">
-      <span className="text-sm font-semibold text-white">PIN: {gamePin}</span>
-      <button
-        type="button"
-        onClick={() => {
-          clearPin();
-          setGamePin(null);
-        }}
-        className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black"
-      >
-        Cancel
-      </button>
-    </div>
-  )}
-
-  {/* Join game input */}
-  {joinMode && !gamePin && (
-    <div className="flex items-center gap-2">
-      <input
-        type="text"
-        inputMode="numeric"
-        maxLength={4}
-        value={joinPinInput}
-        onChange={(e) => setJoinPinInput(e.target.value.replace(/\D/g, ""))}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && joinPinInput.length === 4) {
-            joinPinGame();
-          }
-        }}
-        placeholder="Enter PIN"
-        className="w-24 rounded-lg border border-white px-2 py-1 text-center text-sm tracking-widest text-white placeholder:text-white/50 bg-transparent"
-      />
-      <button
-        type="button"
-        onClick={() => joinPinGame()}
-        disabled={joinPinInput.length !== 4}
-        className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black disabled:opacity-50"
-      >
-        Join
-      </button>
-      <button
-        type="button"
-        onClick={() => {
-          setJoinMode(false);
-          setJoinPinInput("");
-        }}
-        className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black"
-      >
-        Cancel
-      </button>
-    </div>
-  )}
-
-  {/* Create/Join buttons (shown when no PIN and not joining) */}
-  {!gamePin && !joinMode && (
+  {isGuestBrowsing ? (
     <>
       <button
         type="button"
-        onClick={async () => {
-          setCreatingGame(true);
-          await createPinGame();
-          setCreatingGame(false);
+        onClick={() => {
+          setIsGuestBrowsing(false);
+          setScreen("studentProfile");
         }}
-        disabled={creatingGame}
-        className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black disabled:opacity-50"
+        className="rounded-xl border border-white bg-white text-black px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-100"
       >
-        {creatingGame ? "Creating..." : "Create Game"}
+        Sign up to connect
       </button>
       <button
         type="button"
         onClick={() => {
-          setJoinMode(true);
-          setJoinPinInput("");
+          setIsGuestBrowsing(false);
+          setScreen("role");
+        }}
+        className="rounded-xl border border-white text-white px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50 hover:text-black"
+      >
+        Back
+      </button>
+    </>
+  ) : (
+    <>
+      <button
+        type="button"
+        onClick={() => {
+          setEditProfileReturnScreen("dashboard");
+          setScreen("editProfile");
         }}
         className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black"
       >
-        Join Game
+        Edit Profile
+      </button>
+
+      {/* Game PIN display */}
+      {gamePin && !joinMode && (
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold text-white">PIN: {gamePin}</span>
+          <button
+            type="button"
+            onClick={() => {
+              clearPin();
+              setGamePin(null);
+            }}
+            className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {/* Join game input */}
+      {joinMode && !gamePin && (
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            inputMode="numeric"
+            maxLength={4}
+            value={joinPinInput}
+            onChange={(e) => setJoinPinInput(e.target.value.replace(/\D/g, ""))}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && joinPinInput.length === 4) {
+                joinPinGame();
+              }
+            }}
+            placeholder="Enter PIN"
+            className="w-24 rounded-lg border border-white px-2 py-1 text-center text-sm tracking-widest text-white placeholder:text-white/50 bg-transparent"
+          />
+          <button
+            type="button"
+            onClick={() => joinPinGame()}
+            disabled={joinPinInput.length !== 4}
+            className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black disabled:opacity-50"
+          >
+            Join
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setJoinMode(false);
+              setJoinPinInput("");
+            }}
+            className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {/* Create/Join buttons (shown when no PIN and not joining) */}
+      {!gamePin && !joinMode && (
+        <>
+          <button
+            type="button"
+            onClick={async () => {
+              setCreatingGame(true);
+              await createPinGame();
+              setCreatingGame(false);
+            }}
+            disabled={creatingGame}
+            className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black disabled:opacity-50"
+          >
+            {creatingGame ? "Creating..." : "Create Game"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setJoinMode(true);
+              setJoinPinInput("");
+            }}
+            className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black"
+          >
+            Join Game
+          </button>
+        </>
+      )}
+
+      <button
+        type="button"
+        onClick={() => setScreen("connections")}
+        className="relative rounded-xl border border-white text-white px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50 hover:text-black"
+      >
+        Connections
+        {Array.from(unreadCounts.values()).reduce((a, b) => a + b, 0) > 0 && (
+          <span className="absolute -top-2 -right-2 flex h-5 w-5 items-center justify-center rounded-full bg-white border border-black text-[11px] font-bold text-black">
+            {Array.from(unreadCounts.values()).reduce((a, b) => a + b, 0) > 9 ? '9+' : Array.from(unreadCounts.values()).reduce((a, b) => a + b, 0)}
+          </span>
+        )}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          if (gamePin || multiplayerActive) {
+            setShowTitleScreenConfirm(true);
+          } else {
+            setScreen("role");
+          }
+        }}
+        className="rounded-xl border border-white text-white px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50 hover:text-black"
+      >
+        Title screen
       </button>
     </>
   )}
-
- <button
-    type="button"
-    onClick={() => setScreen("connections")}
-    className="relative rounded-xl border border-white text-white px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50 hover:text-black"
-  >
-    Connections
-    {Array.from(unreadCounts.values()).reduce((a, b) => a + b, 0) > 0 && (
-      <span className="absolute -top-2 -right-2 flex h-5 w-5 items-center justify-center rounded-full bg-white border border-black text-[11px] font-bold text-black">
-        {Array.from(unreadCounts.values()).reduce((a, b) => a + b, 0) > 9 ? '9+' : Array.from(unreadCounts.values()).reduce((a, b) => a + b, 0)}
-      </span>
-    )}
-  </button>
-  <button
-    type="button"
-    onClick={() => {
-      if (gamePin || multiplayerActive) {
-        setShowTitleScreenConfirm(true);
-      } else {
-        setScreen("role");
-      }
-    }}
-    className="rounded-xl border border-white text-white px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50 hover:text-black"
-  >
-    Title screen
-  </button>
 </div>
 
         <p className="mb-8 text-center text-sm text-black/60">
@@ -5033,6 +5084,7 @@ if (screen === "dashboard" && seatedRole === "student") {
 
   <div className="max-h-[70vh] overflow-y-auto pr-4 flex flex-col gap-3">
     {/* Your own profile card */}
+    {!isGuestBrowsing && (
     <div className="w-full rounded-2xl border border-black bg-white px-5 py-4 font-semibold text-black flex items-center justify-between">
       <span>
         {studentProfile.linkedinUrl ? (
@@ -5052,6 +5104,7 @@ if (screen === "dashboard" && seatedRole === "student") {
         {studentProfile.major} {studentProfile.school ? ` • ${studentProfile.school}` : ''}
       </span>
     </div>
+    )}
 
     {otherStudents.filter(s => !hiddenUsers.has(s.id)).map((s, i) => (
   <div
@@ -5076,7 +5129,7 @@ if (screen === "dashboard" && seatedRole === "student") {
       {s.major}{s.school ? ` • ${s.school}` : ''}
     </span>
 
-    {myConnections.has(s.id) ? (
+    {isGuestBrowsing ? null : myConnections.has(s.id) ? (
       <span className="text-sm text-green-600 font-semibold">Connected</span>
     ) : pendingOutgoing.has(s.id) ? (
       <span className="text-sm text-gray-500">Pending</span>
@@ -5141,7 +5194,7 @@ if (screen === "dashboard" && seatedRole === "student") {
       {p.workTitle}
     </span>
 
-    {myConnections.has(p.id) ? (
+    {isGuestBrowsing ? null : myConnections.has(p.id) ? (
       <span className="text-sm text-green-600 font-semibold">Connected</span>
     ) : pendingOutgoing.has(p.id) ? (
       <span className="text-sm text-gray-500">Pending</span>
@@ -5470,7 +5523,7 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
       {s.major}{s.school ? ` • ${s.school}` : ''}
     </span>
 
-    {myConnections.has(s.id) ? (
+    {isGuestBrowsing ? null : myConnections.has(s.id) ? (
       <span className="text-sm text-green-600 font-semibold">Connected</span>
     ) : pendingOutgoing.has(s.id) ? (
       <span className="text-sm text-gray-500">Pending</span>
