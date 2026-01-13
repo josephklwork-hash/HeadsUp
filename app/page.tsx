@@ -1237,6 +1237,28 @@ async function sendConnectionRequest(recipientId: string, recipientName: string)
     }
     return;
   }
+  
+  // Send email notification (fire and forget - don't block on this)
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    
+    fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/send-connection-email`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${session?.access_token}`,
+      },
+      body: JSON.stringify({
+        recipientId,
+        senderFirstName: studentProfile.firstName,
+        senderLastName: studentProfile.lastName,
+      }),
+    }).catch(() => {
+      // Silently ignore email errors - connection was still created
+    });
+  } catch {
+    // Silently ignore - the connection request succeeded, email is just a bonus
+  }
 }
 
 async function acceptConnection(odId: string, connectionId: string, odName: string) {
@@ -4605,7 +4627,7 @@ if (screen === "dashboard" && seatedRole === "student") {
    <main className="flex min-h-screen justify-center bg-black px-6 pt-16 min-[1536px]:max-[1650px]:scale-[0.85] min-[1536px]:max-[1650px]:origin-center">
   <div className="w-full max-w-[96rem]">
        <div className="mb-2 flex items-center justify-center gap-4">
-  <h1 className="text-3xl font-bold">Student dashboard</h1>
+  <h1 className="text-3xl font-bold text-white">Student dashboard</h1>
 
   <button
     type="button"
@@ -4613,7 +4635,7 @@ if (screen === "dashboard" && seatedRole === "student") {
       setEditProfileReturnScreen("dashboard");
       setScreen("editProfile");
     }}
-    className="rounded-xl border px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50"
+    className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black"
   >
     Edit Profile
   </button>
@@ -4621,14 +4643,14 @@ if (screen === "dashboard" && seatedRole === "student") {
   {/* Game PIN display */}
   {gamePin && !joinMode && (
     <div className="flex items-center gap-2">
-      <span className="text-sm font-semibold">PIN: {gamePin}</span>
+      <span className="text-sm font-semibold text-white">PIN: {gamePin}</span>
       <button
         type="button"
         onClick={() => {
           clearPin();
           setGamePin(null);
         }}
-        className="rounded-xl border px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50"
+        className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black"
       >
         Cancel
       </button>
@@ -4650,13 +4672,13 @@ if (screen === "dashboard" && seatedRole === "student") {
           }
         }}
         placeholder="Enter PIN"
-        className="w-24 rounded-lg border px-2 py-1 text-center text-sm tracking-widest"
+        className="w-24 rounded-lg border border-white px-2 py-1 text-center text-sm tracking-widest text-white placeholder:text-white/50 bg-transparent"
       />
       <button
         type="button"
         onClick={() => joinPinGame()}
         disabled={joinPinInput.length !== 4}
-        className="rounded-xl border px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 disabled:opacity-50"
+        className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black disabled:opacity-50"
       >
         Join
       </button>
@@ -4666,7 +4688,7 @@ if (screen === "dashboard" && seatedRole === "student") {
           setJoinMode(false);
           setJoinPinInput("");
         }}
-        className="rounded-xl border px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50"
+        className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black"
       >
         Cancel
       </button>
@@ -4684,7 +4706,7 @@ if (screen === "dashboard" && seatedRole === "student") {
           setCreatingGame(false);
         }}
         disabled={creatingGame}
-        className="rounded-xl border px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 disabled:opacity-50"
+        className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black disabled:opacity-50"
       >
         {creatingGame ? "Creating..." : "Create Game"}
       </button>
@@ -4694,7 +4716,7 @@ if (screen === "dashboard" && seatedRole === "student") {
           setJoinMode(true);
           setJoinPinInput("");
         }}
-        className="rounded-xl border px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50"
+        className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black"
       >
         Join Game
       </button>
@@ -4704,7 +4726,7 @@ if (screen === "dashboard" && seatedRole === "student") {
  <button
     type="button"
     onClick={() => setScreen("connections")}
-    className="relative rounded-xl border px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50"
+    className="relative rounded-xl border border-white text-white px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50 hover:text-black"
   >
     Connections
     {Array.from(unreadCounts.values()).reduce((a, b) => a + b, 0) > 0 && (
@@ -4722,7 +4744,7 @@ if (screen === "dashboard" && seatedRole === "student") {
         setScreen("role");
       }
     }}
-    className="rounded-xl border px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50"
+    className="rounded-xl border border-white text-white px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50 hover:text-black"
   >
     Title screen
   </button>
@@ -4915,7 +4937,7 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
    <main className="flex min-h-screen justify-center bg-black px-6 pt-16 min-[1536px]:max-[1650px]:scale-[0.85] min-[1536px]:max-[1650px]:origin-center">
   <div className="w-full max-w-[96rem]">
        <div className="mb-2 flex items-center justify-center gap-4">
-  <h1 className="text-3xl font-bold">Professional Dashboard</h1>
+  <h1 className="text-3xl font-bold text-white">Professional Dashboard</h1>
 
   <button
     type="button"
@@ -4923,7 +4945,7 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
       setEditProfileReturnScreen("professionalDashboard");
       setScreen("editProfile");
     }}
-    className="rounded-xl border px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50"
+    className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black"
   >
     Edit Profile
   </button>
@@ -4931,14 +4953,14 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
   {/* Game PIN display */}
   {gamePin && !joinMode && (
     <div className="flex items-center gap-2">
-      <span className="text-sm font-semibold">PIN: {gamePin}</span>
+      <span className="text-sm font-semibold text-white">PIN: {gamePin}</span>
       <button
         type="button"
         onClick={() => {
           clearPin();
           setGamePin(null);
         }}
-        className="rounded-xl border px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50"
+        className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black"
       >
         Cancel
       </button>
@@ -4960,13 +4982,13 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
           }
         }}
         placeholder="Enter PIN"
-        className="w-24 rounded-lg border px-2 py-1 text-center text-sm tracking-widest"
+        className="w-24 rounded-lg border border-white px-2 py-1 text-center text-sm tracking-widest text-white placeholder:text-white/50 bg-transparent"
       />
       <button
         type="button"
         onClick={() => joinPinGame()}
         disabled={joinPinInput.length !== 4}
-        className="rounded-xl border px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 disabled:opacity-50"
+        className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black disabled:opacity-50"
       >
         Join
       </button>
@@ -4976,7 +4998,7 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
           setJoinMode(false);
           setJoinPinInput("");
         }}
-        className="rounded-xl border px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50"
+        className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black"
       >
         Cancel
       </button>
@@ -4994,7 +5016,7 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
           setCreatingGame(false);
         }}
         disabled={creatingGame}
-        className="rounded-xl border px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 disabled:opacity-50"
+        className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black disabled:opacity-50"
       >
         {creatingGame ? "Creating..." : "Create Game"}
       </button>
@@ -5004,7 +5026,7 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
           setJoinMode(true);
           setJoinPinInput("");
         }}
-        className="rounded-xl border px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50"
+        className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black"
       >
         Join Game
       </button>
@@ -5014,7 +5036,7 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
   <button
     type="button"
     onClick={() => setScreen("connections")}
-    className="relative rounded-xl border px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50"
+    className="relative rounded-xl border border-white text-white px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50 hover:text-black"
   >
     Connections
     {Array.from(unreadCounts.values()).reduce((a, b) => a + b, 0) > 0 && (
@@ -5032,7 +5054,7 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
         setScreen("role");
       }
     }}
-    className="rounded-xl border px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50"
+    className="rounded-xl border border-white text-white px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50 hover:text-black"
   >
     Title screen
   </button>
