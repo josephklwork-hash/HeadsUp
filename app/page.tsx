@@ -1760,43 +1760,41 @@ useEffect(() => {
   if (screen !== 'dashboard' && screen !== 'professionalDashboard') return;
   
   const channel = supabase
-    .channel(`connections-${sbUser.id}`)
+    .channel(`connections-realtime-${sbUser.id}`)
     .on('postgres_changes', {
       event: '*',
       schema: 'public',
       table: 'connections',
-    }, (payload) => {
-      const conn = payload.new as any;
-      const oldConn = payload.old as any;
+    }, (payload: { eventType: string; new: Record<string, unknown>; old: Record<string, unknown> }) => {
+      const { eventType, new: newRecord, old: oldRecord } = payload;
       
-      // Determine if this change involves the current user
-      const isMyConnection = 
-        conn?.requester_id === sbUser.id || 
-        conn?.recipient_id === sbUser.id ||
-        oldConn?.requester_id === sbUser.id ||
-        oldConn?.recipient_id === sbUser.id;
+      // For DELETE, use oldRecord; for INSERT/UPDATE, use newRecord
+      const record = eventType === 'DELETE' ? oldRecord : newRecord;
+      if (!record) return;
       
-      if (!isMyConnection) return;
+      const requesterId = record.requester_id as string;
+      const recipientId = record.recipient_id as string;
+      const recordId = record.id as string;
+      const status = record.status as string;
       
-      if (payload.eventType === 'INSERT') {
-        // New connection request
-        const isRequester = conn.requester_id === sbUser.id;
-        const odId = isRequester ? conn.recipient_id : conn.requester_id;
-        
-        if (conn.status === 'pending') {
-          if (isRequester) {
-            setPendingOutgoing(prev => new Set(prev).add(odId));
-          } else {
-            setPendingIncoming(prev => new Map(prev).set(odId, conn.id));
-          }
+      const isRequester = requesterId === sbUser.id;
+      const isRecipient = recipientId === sbUser.id;
+      if (!isRequester && !isRecipient) return;
+      
+      const odId = isRequester ? recipientId : requesterId;
+      
+      if (eventType === 'INSERT') {
+        if (isRequester) {
+          setPendingOutgoing(prev => new Set(prev).add(odId));
+        } else {
+          setPendingIncoming(prev => {
+            const next = new Map(prev);
+            next.set(odId, recordId);
+            return next;
+          });
         }
-      } else if (payload.eventType === 'UPDATE') {
-        // Connection status changed
-        const isRequester = conn.requester_id === sbUser.id;
-        const odId = isRequester ? conn.recipient_id : conn.requester_id;
-        
-        if (conn.status === 'accepted') {
-          // Move from pending to connected
+      } else if (eventType === 'UPDATE') {
+        if (status === 'accepted') {
           setMyConnections(prev => new Set(prev).add(odId));
           setPendingOutgoing(prev => {
             const next = new Set(prev);
@@ -1808,27 +1806,9 @@ useEffect(() => {
             next.delete(odId);
             return next;
           });
-        } else if (conn.status === 'rejected') {
-          // Remove from pending
-          setPendingOutgoing(prev => {
-            const next = new Set(prev);
-            next.delete(odId);
-            return next;
-          });
-          setPendingIncoming(prev => {
-            const next = new Map(prev);
-            next.delete(odId);
-            return next;
-          });
         }
-      } else if (payload.eventType === 'DELETE') {
-        // Connection removed
-        const odId = oldConn.requester_id === sbUser.id ? oldConn.recipient_id : oldConn.requester_id;
-        setMyConnections(prev => {
-          const next = new Set(prev);
-          next.delete(odId);
-          return next;
-        });
+      } else if (eventType === 'DELETE') {
+        // Clear from ALL states - covers both requester and recipient
         setPendingOutgoing(prev => {
           const next = new Set(prev);
           next.delete(odId);
@@ -1836,6 +1816,11 @@ useEffect(() => {
         });
         setPendingIncoming(prev => {
           const next = new Map(prev);
+          next.delete(odId);
+          return next;
+        });
+        setMyConnections(prev => {
+          const next = new Set(prev);
           next.delete(odId);
           return next;
         });
