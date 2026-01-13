@@ -1771,8 +1771,8 @@ useEffect(() => {
       .order('created_at', { ascending: false })
       .limit(50);
     
-    // Exclude own profile only if logged in
-    if (sbUser?.id) {
+    // Exclude own profile only if logged in AND not guest browsing
+    if (sbUser?.id && !isGuestBrowsing) {
       studentsQuery = studentsQuery.neq('id', sbUser.id);
       professionalsQuery = professionalsQuery.neq('id', sbUser.id);
     }
@@ -4736,6 +4736,7 @@ if (screen === "studentProfile") {
             type="button"
             disabled={creatingAccount}
             onClick={() => {
+              const wasGuestBrowsing = isGuestBrowsing;
               setStudentProfile({
                 firstName: "",
                 lastName: "",
@@ -4749,7 +4750,12 @@ if (screen === "studentProfile") {
                 linkedinUrl: "",
               });
               setSeatedRole(null);
-              setScreen("role");
+              if (wasGuestBrowsing) {
+                setScreen("dashboard");
+              } else {
+                setIsGuestBrowsing(false);
+                setScreen("role");
+              }
             }}
             className={`rounded-2xl border border-white text-white px-4 py-3 text-sm font-semibold transition-colors ${creatingAccount ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-50 hover:text-black"}`}
           >
