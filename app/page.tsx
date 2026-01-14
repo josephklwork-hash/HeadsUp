@@ -433,10 +433,39 @@ function validatePassword(password: string): {
 }
 
 /**
- * Validate email format
+ * Validate email format with strict validation
  */
 function validateEmail(email: string): { valid: boolean; sanitized: string; error: string } {
-  return validateInput(email, 'email', { required: true });
+  const result = validateInput(email, 'email', { required: true });
+  if (!result.valid) return result;
+  
+  const sanitized = result.sanitized.toLowerCase();
+  const [localPart, domain] = sanitized.split('@');
+  
+  // Require at least 3 characters before @
+  if (!localPart || localPart.length < 3) {
+    return { valid: false, sanitized, error: 'Please enter a valid email address' };
+  }
+  
+  // Block common fake/test domains
+  const blockedDomains = [
+    'a.com', 'b.com', 'c.com', 'test.com', 'fake.com', 'example.com',
+    'asdf.com', 'qwerty.com', 'temp.com', 'trash.com', 'junk.com',
+    'aa.com', 'ab.com', 'abc.com', 'xyz.com', 'aaa.com', 'bbb.com',
+    'mailinator.com', 'guerrillamail.com', 'tempmail.com', 'throwaway.com',
+    '10minutemail.com', 'fakeinbox.com', 'trashmail.com'
+  ];
+  
+  if (!domain || blockedDomains.includes(domain)) {
+    return { valid: false, sanitized, error: 'Please use a valid email address (no temporary or fake emails)' };
+  }
+  
+  // Require domain to have at least 4 characters (e.g., a.co)
+  if (domain.length < 4) {
+    return { valid: false, sanitized, error: 'Please enter a valid email address' };
+  }
+  
+  return { valid: true, sanitized, error: '' };
 }
 
 /**
