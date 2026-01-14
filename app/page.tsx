@@ -3970,7 +3970,7 @@ useEffect(() => {
         .or(`and(sender_id.eq.${sbUser!.id},recipient_id.eq.${odId}),and(sender_id.eq.${odId},recipient_id.eq.${sbUser!.id})`)
         .order('created_at', { ascending: false })
         .limit(1)
-        .single();
+        .maybeSingle();
       
       if (lastMsg) {
         lastMsgs.set(odId, {
