@@ -6158,7 +6158,7 @@ if (screen === "editProfile") {
 
           <button
             type="button"
-            onClick={() => setScreen(seatedRole === 'professional' ? 'professionalDashboard' : 'dashboard')}
+            onClick={() => setScreen(editProfileReturnScreen)}
             className={buttonClass}
           >
             Cancel
