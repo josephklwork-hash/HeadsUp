@@ -515,6 +515,20 @@ function validateMessage(text: string): { valid: boolean; sanitized: string; err
    END SECURITY MODULE
    ============================================ */
 
+// Helper to get sort priority for dashboard ordering
+// A=0: Accept/Reject (incoming), B=1: Connected, C=2: Pending (outgoing), D=3: Connect (no relation)
+function getConnectionSortPriority(
+  userId: string,
+  myConnections: Set<string>,
+  pendingOutgoing: Set<string>,
+  pendingIncoming: Map<string, { id: string; createdAt: string }>
+): number {
+  if (pendingIncoming.has(userId)) return 0; // A - Accept/Reject
+  if (myConnections.has(userId)) return 1;   // B - Connected
+  if (pendingOutgoing.has(userId)) return 2; // C - Pending
+  return 3;                                   // D - Connect
+}
+
 function streetNameFromCount(street: Street): StreetName {
   if (street === 0) return "Preflop";
   if (street === 3) return "Flop";
@@ -1192,7 +1206,7 @@ const [otherProfessionals, setOtherProfessionals] = useState<{ id: string; first
 // Connection system state
 const [myConnections, setMyConnections] = useState<Set<string>>(new Set());
 const [pendingOutgoing, setPendingOutgoing] = useState<Set<string>>(new Set());
-const [pendingIncoming, setPendingIncoming] = useState<Map<string, string>>(new Map());
+const [pendingIncoming, setPendingIncoming] = useState<Map<string, { id: string; createdAt: string }>>(new Map());
 
 // Rejection tracking state
 const [rejectionCounts, setRejectionCounts] = useState<Map<string, number>>(new Map());
@@ -1832,7 +1846,7 @@ useEffect(() => {
     if (connectionsData) {
       const connected = new Set<string>();
       const outgoing = new Set<string>();
-      const incoming = new Map<string, string>();
+      const incoming = new Map<string, { id: string; createdAt: string }>();
       
       for (const conn of connectionsData) {
         const isRequester = conn.requester_id === sbUser!.id;
@@ -1844,7 +1858,7 @@ useEffect(() => {
           if (isRequester) {
             outgoing.add(odId);
           } else {
-            incoming.set(odId, conn.id);
+            incoming.set(odId, { id: conn.id, createdAt: conn.created_at });
           }
         }
       }
@@ -1923,7 +1937,7 @@ useEffect(() => {
         } else {
           setPendingIncoming(prev => {
             const next = new Map(prev);
-            next.set(odId, recordId);
+            next.set(odId, { id: recordId, createdAt: (record.created_at as string) || new Date().toISOString() });
             return next;
           });
         }
@@ -1951,7 +1965,7 @@ useEffect(() => {
           
           const connected = new Set<string>();
           const outgoing = new Set<string>();
-          const incoming = new Map<string, string>();
+          const incoming = new Map<string, { id: string; createdAt: string }>();
           
           if (connectionsData) {
             for (const conn of connectionsData) {
@@ -1964,7 +1978,7 @@ useEffect(() => {
                 if (isRequester) {
                   outgoing.add(odId);
                 } else {
-                  incoming.set(odId, conn.id);
+                  incoming.set(odId, { id: conn.id, createdAt: conn.created_at });
                 }
               }
             }
@@ -3635,6 +3649,7 @@ opponentTimerRef.current = window.setTimeout(() => {
   // settle / advance street
   useEffect(() => {
     if (!seatedRole) return;
+    if (multiplayerActive) return; // Host controller handles this in multiplayer
     if (handResult.status !== "playing") return;
     settleIfStreetComplete();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -5223,7 +5238,14 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
     </div>
     )}
 
-    {otherStudents.filter(s => !hiddenUsers.has(s.id)).map((s, i) => (
+    {otherStudents
+      .filter(s => !hiddenUsers.has(s.id))
+      .sort((a, b) => {
+        const aPriority = getConnectionSortPriority(a.id, myConnections, pendingOutgoing, pendingIncoming);
+        const bPriority = getConnectionSortPriority(b.id, myConnections, pendingOutgoing, pendingIncoming);
+        return aPriority - bPriority;
+      })
+      .map((s, i) => (
   <div
     key={i}
     className="w-full rounded-2xl border border-black bg-white px-5 py-4 font-semibold text-black flex items-center justify-between"
@@ -5268,13 +5290,13 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
       ) : pendingIncoming.has(s.id) ? (
         <div className="flex gap-2">
           <button 
-            onClick={() => acceptConnection(s.id, pendingIncoming.get(s.id)!, `${s.firstName} ${s.lastName}`)}
+            onClick={() => acceptConnection(s.id, pendingIncoming.get(s.id)!.id, `${s.firstName} ${s.lastName}`)}
             className="rounded-xl border border-green-600 bg-green-50 px-3 py-1.5 text-sm font-semibold text-green-600 hover:bg-green-100"
           >
             Accept
           </button>
           <button 
-            onClick={() => rejectConnection(s.id, pendingIncoming.get(s.id)!, `${s.firstName} ${s.lastName}`)}
+            onClick={() => rejectConnection(s.id, pendingIncoming.get(s.id)!.id, `${s.firstName} ${s.lastName}`)}
             className="rounded-xl border border-red-600 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-600 hover:bg-red-100"
           >
             Reject
@@ -5304,7 +5326,14 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
   </button>
 
   <div className="max-h-[70vh] overflow-y-auto pr-4 flex flex-col gap-3">
-    {otherProfessionals.filter(p => !hiddenUsers.has(p.id)).map((p, i) => (
+    {otherProfessionals
+      .filter(p => !hiddenUsers.has(p.id))
+      .sort((a, b) => {
+        const aPriority = getConnectionSortPriority(a.id, myConnections, pendingOutgoing, pendingIncoming);
+        const bPriority = getConnectionSortPriority(b.id, myConnections, pendingOutgoing, pendingIncoming);
+        return aPriority - bPriority;
+      })
+      .map((p, i) => (
   <div
     key={i}
     className="w-full rounded-2xl border border-black bg-white px-5 py-[13px] font-semibold text-black flex items-center justify-between"
@@ -5334,13 +5363,13 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
     ) : pendingIncoming.has(p.id) ? (
       <div className="flex gap-2">
         <button 
-          onClick={() => acceptConnection(p.id, pendingIncoming.get(p.id)!, `${p.firstName} ${p.lastName}`)}
+          onClick={() => acceptConnection(p.id, pendingIncoming.get(p.id)!.id, `${p.firstName} ${p.lastName}`)}
           className="rounded-xl border border-green-600 bg-green-50 px-3 py-1.5 text-sm font-semibold text-green-600 hover:bg-green-100"
         >
           Accept
         </button>
         <button 
-          onClick={() => rejectConnection(p.id, pendingIncoming.get(p.id)!, `${p.firstName} ${p.lastName}`)}
+          onClick={() => rejectConnection(p.id, pendingIncoming.get(p.id)!.id, `${p.firstName} ${p.lastName}`)}
           className="rounded-xl border border-red-600 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-600 hover:bg-red-100"
         >
           Reject
@@ -5568,7 +5597,14 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
       </span>
     </div>
 
-    {otherProfessionals.filter(p => !hiddenUsers.has(p.id)).map((p, i) => (
+    {otherProfessionals
+      .filter(p => !hiddenUsers.has(p.id))
+      .sort((a, b) => {
+        const aPriority = getConnectionSortPriority(a.id, myConnections, pendingOutgoing, pendingIncoming);
+        const bPriority = getConnectionSortPriority(b.id, myConnections, pendingOutgoing, pendingIncoming);
+        return aPriority - bPriority;
+      })
+      .map((p, i) => (
   <div
     key={i}
     className="w-full rounded-2xl border border-black bg-white px-5 py-[14px] font-semibold text-black flex items-center justify-between"
@@ -5598,13 +5634,13 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
     ) : pendingIncoming.has(p.id) ? (
       <div className="flex gap-2">
         <button 
-          onClick={() => acceptConnection(p.id, pendingIncoming.get(p.id)!, `${p.firstName} ${p.lastName}`)}
+          onClick={() => acceptConnection(p.id, pendingIncoming.get(p.id)!.id, `${p.firstName} ${p.lastName}`)}
           className="rounded-xl border border-green-600 bg-green-50 px-3 py-1.5 text-sm font-semibold text-green-600 hover:bg-green-100"
         >
           Accept
         </button>
         <button 
-          onClick={() => rejectConnection(p.id, pendingIncoming.get(p.id)!, `${p.firstName} ${p.lastName}`)}
+          onClick={() => rejectConnection(p.id, pendingIncoming.get(p.id)!.id, `${p.firstName} ${p.lastName}`)}
           className="rounded-xl border border-red-600 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-600 hover:bg-red-100"
         >
           Reject
@@ -5633,7 +5669,14 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
   </button>
 
   <div className="max-h-[70vh] overflow-y-auto pr-2 flex flex-col gap-3">
-    {otherStudents.filter(s => !hiddenUsers.has(s.id)).map((s, i) => (
+    {otherStudents
+      .filter(s => !hiddenUsers.has(s.id))
+      .sort((a, b) => {
+        const aPriority = getConnectionSortPriority(a.id, myConnections, pendingOutgoing, pendingIncoming);
+        const bPriority = getConnectionSortPriority(b.id, myConnections, pendingOutgoing, pendingIncoming);
+        return aPriority - bPriority;
+      })
+      .map((s, i) => (
   <div
     key={i}
     className="w-full rounded-2xl border border-black bg-white px-5 py-[13px] font-semibold text-black flex items-center justify-between"
@@ -5663,13 +5706,13 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
     ) : pendingIncoming.has(s.id) ? (
       <div className="flex gap-2">
         <button 
-          onClick={() => acceptConnection(s.id, pendingIncoming.get(s.id)!, `${s.firstName} ${s.lastName}`)}
+          onClick={() => acceptConnection(s.id, pendingIncoming.get(s.id)!.id, `${s.firstName} ${s.lastName}`)}
           className="rounded-xl border border-green-600 bg-green-50 px-3 py-1.5 text-sm font-semibold text-green-600 hover:bg-green-100"
         >
           Accept
         </button>
         <button 
-          onClick={() => rejectConnection(s.id, pendingIncoming.get(s.id)!, `${s.firstName} ${s.lastName}`)}
+          onClick={() => rejectConnection(s.id, pendingIncoming.get(s.id)!.id, `${s.firstName} ${s.lastName}`)}
           className="rounded-xl border border-red-600 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-600 hover:bg-red-100"
         >
           Reject
