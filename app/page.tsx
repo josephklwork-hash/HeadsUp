@@ -1605,6 +1605,8 @@ useEffect(() => {
     // JOINER: Handle host's state updates
     if (!isHost && payload.event === "HOST_STATE" && payload.state) {
       setMpState(payload.state);
+      // Save state for joiner reconnection
+      sessionStorage.setItem('headsup_joinerState', JSON.stringify(payload.state));
     }
     
     // Both: Handle opponent quit
@@ -2113,6 +2115,19 @@ useEffect(() => {
         }
       }
       
+      // Restore joiner state if available (for immediate display while waiting for host)
+      if (savedSeat === 'top') {
+        const savedJoinerStateJson = sessionStorage.getItem('headsup_joinerState');
+        if (savedJoinerStateJson) {
+          try {
+            const parsedState = JSON.parse(savedJoinerStateJson) as HostState;
+            setMpState(parsedState);
+          } catch (e) {
+            // Silently ignore parse errors
+          }
+        }
+      }
+      
       // Restore hand history if available
       const savedHistoryJson = sessionStorage.getItem('headsup_handHistory');
       if (savedHistoryJson) {
@@ -2129,17 +2144,33 @@ useEffect(() => {
       setGamePin(savedPin);
       setSeatedRole('student');
       
-      if (gameRow.status === 'active') {
+      // Check if we have saved state (proves game was in progress)
+      const savedJoinerStateJson = sessionStorage.getItem('headsup_joinerState');
+      const hasGameInProgress = savedSeat === 'bottom' ? !!savedStateJson : !!savedJoinerStateJson;
+      
+      if (gameRow.status === 'active' || hasGameInProgress) {
+        // Restore joiner's cached state immediately while waiting for host
+        if (savedSeat === 'top' && savedJoinerStateJson) {
+          try {
+            const parsedState = JSON.parse(savedJoinerStateJson) as HostState;
+            setMpState(parsedState);
+          } catch (e) {
+            // Silently ignore parse errors
+          }
+        }
         setMultiplayerActive(true);
         setScreen('game');
       } else if (savedSeat === 'bottom') {
+        // Host waiting for joiner (no game started yet)
         setScreen('role');
       } else {
+        // No valid game state, clear everything
         sessionStorage.removeItem('headsup_gameId');
         sessionStorage.removeItem('headsup_mySeat');
         sessionStorage.removeItem('headsup_gamePin');
         sessionStorage.removeItem('headsup_dealerOffset');
         sessionStorage.removeItem('headsup_hostState');
+        sessionStorage.removeItem('headsup_joinerState');
         sessionStorage.removeItem('headsup_handHistory');
       }
     } catch (e) {
@@ -3536,7 +3567,10 @@ if (street === 5 && currentFacingBet(seat)) {
       // HOST: Process action directly
       mpHost.processAction(seat, action);
       // Update our display
-      setMpState(JSON.parse(JSON.stringify(mpHost.getState())));
+      const newState = JSON.parse(JSON.stringify(mpHost.getState()));
+      setMpState(newState);
+      // Save state for reconnection
+      sessionStorage.setItem('headsup_hostState', JSON.stringify(newState));
     } else if (mpChannelRef.current) {
       // JOINER: Send action to host directly via channel
       mpChannelRef.current.send({
@@ -6699,6 +6733,7 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
         sessionStorage.removeItem('headsup_gamePin');
         sessionStorage.removeItem('headsup_dealerOffset');
         sessionStorage.removeItem('headsup_hostState');
+        sessionStorage.removeItem('headsup_joinerState');
         sessionStorage.removeItem('headsup_handHistory');
         
         clearTimers();
