@@ -5270,6 +5270,13 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
     {otherStudents
       .filter(s => !hiddenUsers.has(s.id))
       .sort((a, b) => {
+        // For guest browsing, always keep founder at top
+        if (isGuestBrowsing) {
+          if (a.id === FOUNDER_ID) return -1;
+          if (b.id === FOUNDER_ID) return 1;
+          return 0; // Keep original order for non-founder
+        }
+        // For logged-in users, sort by connection priority
         const aPriority = getConnectionSortPriority(a.id, myConnections, pendingOutgoing, pendingIncoming);
         const bPriority = getConnectionSortPriority(b.id, myConnections, pendingOutgoing, pendingIncoming);
         return aPriority - bPriority;
