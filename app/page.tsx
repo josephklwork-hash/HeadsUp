@@ -1230,7 +1230,7 @@ const [studentMenuOpen, setStudentMenuOpen] = useState(false);
 
 const [otherStudents, setOtherStudents] = useState<{ id: string; firstName: string; lastName: string; year: string; major: string; school: string; linkedinUrl: string | null }[]>([]);
 
-const [otherProfessionals, setOtherProfessionals] = useState<{ id: string; firstName: string; lastName: string; company: string; workTitle: string; linkedinUrl: string | null }[]>([]);
+const [otherProfessionals, setOtherProfessionals] = useState<{ id: string; firstName: string; lastName: string; company: string; workTitle: string; school: string; linkedinUrl: string | null }[]>([]);
 
 // Connection system state
 const [myConnections, setMyConnections] = useState<Set<string>>(new Set());
@@ -1852,18 +1852,31 @@ useEffect(() => {
         });
       }
       
-      setOtherStudents(mappedStudents);
+      // Deduplicate by ID
+      const uniqueStudents = mappedStudents.filter((s, index, self) => 
+        index === self.findIndex(t => t.id === s.id)
+      );
+      
+      setOtherStudents(uniqueStudents);
     }
     
     if (professionals) {
-      setOtherProfessionals(professionals.map(p => ({
+      const mappedProfessionals = professionals.map(p => ({
         id: p.id,
         firstName: p.first_name,
         lastName: p.last_name,
         company: p.company || '',
         workTitle: p.work_title || '',
+        school: p.school || '',
         linkedinUrl: p.linkedin_url || null,
-      })));
+      }));
+      
+      // Deduplicate by ID
+      const uniqueProfessionals = mappedProfessionals.filter((p, index, self) => 
+        index === self.findIndex(t => t.id === p.id)
+      );
+      
+      setOtherProfessionals(uniqueProfessionals);
     }
     
     // Fetch connections (skip for guest browsing)
@@ -2371,9 +2384,17 @@ async function joinPinGame() {
   
   let user: User;
   try {
-    const { data: anonData, error: anonErr } = await supabase.auth.signInAnonymously();
-    if (anonErr || !anonData.user) throw anonErr;
-    user = anonData.user;
+    // Try to use existing session first (preserve logged-in state)
+    const { data: existingData } = await supabase.auth.getUser();
+    
+    if (existingData?.user) {
+      user = existingData.user;
+    } else {
+      // Only create anonymous user if not logged in
+      const { data: anonData, error: anonErr } = await supabase.auth.signInAnonymously();
+      if (anonErr || !anonData.user) throw anonErr;
+      user = anonData.user;
+    }
   } catch (e) {
     alert("Could not connect. Check your internet.");
     setCreatingGame(false);
@@ -3979,7 +4000,7 @@ useEffect(() => {
     );
     
     const { data: profiles } = await supabase
-      .from('profiles')
+      .from('public_profiles')
       .select('id, first_name, last_name, linkedin_url')
       .in('id', otherUserIds);
     
@@ -5423,7 +5444,7 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
       )}
       {" • "}
       {p.company} {" • "}
-      {p.workTitle}
+      {p.workTitle}{p.school ? ` • ${p.school}` : ''}
     </span>
 
     {isGuestBrowsing ? null : myConnections.has(p.id) ? (
@@ -5694,7 +5715,7 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
       )}
       {" • "}
       {p.company} {" • "}
-      {p.workTitle}
+      {p.workTitle}{p.school ? ` • ${p.school}` : ''}
     </span>
 
     {myConnections.has(p.id) ? (
