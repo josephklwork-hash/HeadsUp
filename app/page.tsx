@@ -1123,12 +1123,24 @@ const setStreetBettor = (next: any) =>
   return "role";
 });
 
+  const [previousScreen, setPreviousScreen] = useState<Screen>("role");
+
   // Save screen to sessionStorage when it changes
 useEffect(() => {
   if (screen) {
     sessionStorage.setItem('headsup_screen', screen);
   }
 }, [screen]);
+
+// Track previous screen for Go back functionality
+const navigateTo = (newScreen: Screen) => {
+  setPreviousScreen(screen);
+  setScreen(newScreen);
+};
+
+const goBack = () => {
+  setScreen(previousScreen);
+};
 
   const [gamePin, setGamePin] = useState<string | null>(null);
   const [joinMode, setJoinMode] = useState(false);
@@ -4408,7 +4420,7 @@ const joinGame = () => {
         type="button"
         onClick={() => {
           clearTimers();
-          setScreen("studentLogin");
+          navigateTo("studentLogin");
         }}
         className="text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-white underline opacity-80 hover:opacity-100"
       >
@@ -4424,7 +4436,7 @@ const joinGame = () => {
           setOtherProfessionals([]);
 
           setSeatedRole(null);
-          setScreen("studentProfile");
+          navigateTo("studentProfile");
         }}
         className="text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-white underline opacity-80 hover:opacity-100"
       >
@@ -4435,7 +4447,7 @@ const joinGame = () => {
         type="button"
         onClick={() => {
           setIsGuestBrowsing(true);
-          setScreen("dashboard");
+          navigateTo("dashboard");
         }}
         className="text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-white underline opacity-80 hover:opacity-100"
       >
@@ -4865,7 +4877,6 @@ if (screen === "studentProfile") {
             type="button"
             disabled={creatingAccount}
             onClick={() => {
-              const wasGuestBrowsing = isGuestBrowsing;
               setStudentProfile({
                 firstName: "",
                 lastName: "",
@@ -4879,12 +4890,7 @@ if (screen === "studentProfile") {
                 linkedinUrl: "",
               });
               setSeatedRole(null);
-              if (wasGuestBrowsing) {
-                setScreen("dashboard");
-              } else {
-                setIsGuestBrowsing(false);
-                setScreen("role");
-              }
+              goBack();
             }}
             className={`rounded-2xl border border-white text-white px-4 py-3 text-sm font-semibold transition-colors ${creatingAccount ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-50 hover:text-black"}`}
           >
@@ -5018,7 +5024,7 @@ if (screen === "studentLogin") {
             onClick={() => {
               setLoginEmail('');
               setLoginPassword('');
-              setScreen("role");
+              goBack();
             }}
             className="rounded-2xl border border-white text-white px-4 py-3 text-sm font-semibold hover:bg-gray-50 hover:text-black"
           >
@@ -5142,8 +5148,7 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
       <button
         type="button"
         onClick={() => {
-          setIsGuestBrowsing(false);
-          setScreen("studentProfile");
+          navigateTo("studentProfile");
         }}
         className="rounded-xl border border-white bg-white text-black px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-100"
       >
@@ -5153,7 +5158,7 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
         type="button"
         onClick={() => {
           setIsGuestBrowsing(false);
-          setScreen("role");
+          goBack();
         }}
         className="rounded-xl border border-white text-white px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50 hover:text-black"
       >
