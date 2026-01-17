@@ -1123,7 +1123,7 @@ const setStreetBettor = (next: any) =>
   return "role";
 });
 
-  const [previousScreen, setPreviousScreen] = useState<Screen>("role");
+  const [screenHistory, setScreenHistory] = useState<Screen[]>(["role"]);
 
   // Save screen to sessionStorage when it changes
 useEffect(() => {
@@ -1132,14 +1132,23 @@ useEffect(() => {
   }
 }, [screen]);
 
-// Track previous screen for Go back functionality
+// Track navigation history for Go back functionality
 const navigateTo = (newScreen: Screen) => {
-  setPreviousScreen(screen);
+  setScreenHistory(prev => [...prev, screen]);
   setScreen(newScreen);
 };
 
 const goBack = () => {
-  setScreen(previousScreen);
+  setScreenHistory(prev => {
+    if (prev.length === 0) {
+      setScreen("role");
+      return ["role"];
+    }
+    const newHistory = [...prev];
+    const previousScreen = newHistory.pop() || "role";
+    setScreen(previousScreen);
+    return newHistory.length === 0 ? ["role"] : newHistory;
+  });
 };
 
   const [gamePin, setGamePin] = useState<string | null>(null);
