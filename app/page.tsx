@@ -1134,6 +1134,18 @@ useEffect(() => {
   const [joinMode, setJoinMode] = useState(false);
   const [joinPinInput, setJoinPinInput] = useState("");
   const [isGuestBrowsing, setIsGuestBrowsing] = useState(false);
+
+// Restore and save isGuestBrowsing to sessionStorage
+useEffect(() => {
+  const saved = sessionStorage.getItem('headsup_isGuestBrowsing');
+  if (saved === 'true') {
+    setIsGuestBrowsing(true);
+  }
+}, []);
+
+useEffect(() => {
+  sessionStorage.setItem('headsup_isGuestBrowsing', String(isGuestBrowsing));
+}, [isGuestBrowsing]);
   const [showFounderConnectModal, setShowFounderConnectModal] = useState(false);
   const [founderConnectForm, setFounderConnectForm] = useState({ name: '', email: '' });
   const [founderConnectSubmitting, setFounderConnectSubmitting] = useState(false);
