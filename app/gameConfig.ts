@@ -11,7 +11,7 @@ export const GAME_CONFIG = {
    * Starting stack size in big blinds
    * Example: 25 for fast games, 50 for standard, 100 for deep stack
    */
-  STARTING_STACK_BB: 50,
+  STARTING_STACK_BB: 25,
 
   /**
    * How often blind levels change (stacks reduced by 25%)
