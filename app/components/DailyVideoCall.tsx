@@ -256,7 +256,7 @@ export default function DailyVideoCall({
       {/* Resize handle - bottom-right corner only */}
       <div
         onMouseDown={(e) => handleResizeStart(e, 'br')}
-        className="absolute bottom-0 right-0 w-6 h-6 cursor-nwse-resize bg-white/50 hover:bg-white/70 z-20 transition-colors"
+        className="absolute bottom-0 right-0 w-3 h-3 cursor-nwse-resize bg-white/50 hover:bg-white/70 z-20 transition-colors"
         style={{ borderBottomRightRadius: '12px', pointerEvents: 'auto' }}
       />
     </div>
