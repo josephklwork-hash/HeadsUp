@@ -233,13 +233,14 @@ export default function DailyVideoCall({
         height: dimensions.height,
         left: position.x,
         top: position.y,
-        cursor: isDragging ? 'grabbing' : 'auto'
+        pointerEvents: 'none'
       }}
     >
       {/* Drag handle bar */}
       <div
         onMouseDown={handleDragStart}
         className="absolute top-0 left-0 right-0 h-8 bg-gradient-to-b from-black/70 to-transparent cursor-grab active:cursor-grabbing z-30 flex items-center justify-center rounded-t-xl"
+        style={{ pointerEvents: 'auto' }}
       >
         <div className="flex gap-1">
           <div className="w-1.5 h-1.5 rounded-full bg-white/50"></div>
@@ -251,13 +252,14 @@ export default function DailyVideoCall({
       <div
         ref={callContainerRef}
         className="w-full h-full rounded-xl border-2 border-white/20 overflow-hidden shadow-lg bg-black"
+        style={{ pointerEvents: 'auto' }}
       />
 
       {/* Resize handle - bottom-right corner only */}
       <div
         onMouseDown={(e) => handleResizeStart(e, 'br')}
         className="absolute bottom-0 right-0 w-6 h-6 cursor-nwse-resize bg-white/50 hover:bg-white/70 z-20 transition-colors"
-        style={{ borderBottomRightRadius: '12px' }}
+        style={{ borderBottomRightRadius: '12px', pointerEvents: 'auto' }}
       />
     </div>
   );
