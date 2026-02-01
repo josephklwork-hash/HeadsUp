@@ -781,7 +781,7 @@ function handRankOnly(score: number[]) {
 }
 
 const connectButtonClass =
-  "rounded-xl border border-black bg-white px-3 py-1 text-sm font-semibold text-black transition-colors hover:bg-gray-50";
+  "rounded-xl border border-black bg-white px-3 py-1 text-sm font-semibold text-black transition-all duration-300 hover:bg-gray-50 hover:scale-[1.02] hover:shadow-[0_10px_30px_rgba(0,0,0,0.15)]";
 
 /* ---------- UI components ---------- */
 
@@ -1094,7 +1094,7 @@ const setStreetBettor = (next: any) =>
       typeof next === "function" ? next(prev.streetBettor) : next,
   }));
 
-  const [dealerOffset, setDealerOffset] = useState<0 | 1>(0);
+  const [dealerOffset, setDealerOffset] = useState<0 | 1>(() => Math.random() < 0.5 ? 0 : 1);
 
   const [betSize, setBetSize] = useState<number | "">("");
 
@@ -1249,6 +1249,118 @@ useEffect(() => {
   }
 }, [gamePin]);
 
+// Track which hand we've already animated to prevent duplicate animations
+const lastAnimatedHandRef = useRef<number>(-1);
+
+// Card dealing animation state
+const [dealtCards, setDealtCards] = useState<{
+  sbCard1: boolean;
+  bbCard1: boolean;
+  sbCard2: boolean;
+  bbCard2: boolean;
+  flop1: boolean;
+  flop2: boolean;
+  flop3: boolean;
+  turn: boolean;
+  river: boolean;
+}>({
+  sbCard1: false,
+  bbCard1: false,
+  sbCard2: false,
+  bbCard2: false,
+  flop1: false,
+  flop2: false,
+  flop3: false,
+  turn: false,
+  river: false,
+});
+
+// Card flip animation state for reveals
+const [flippedCards, setFlippedCards] = useState<{
+  oppCard1: boolean;
+  oppCard2: boolean;
+  myCard1: boolean;
+  myCard2: boolean;
+}>({
+  oppCard1: false,
+  oppCard2: false,
+  myCard1: false,
+  myCard2: false,
+});
+
+// Trigger card dealing animations
+useEffect(() => {
+  // Check for cards in both local state (host) and multiplayer state (joiner)
+  const hasCards = cards || (mpState?.cards);
+  console.log('🎴 Card animation effect - handId:', handId, 'cards:', !!cards, 'mpState.cards:', !!(mpState?.cards), 'hasCards:', !!hasCards);
+
+  // Skip if we've already animated this hand
+  if (lastAnimatedHandRef.current === handId) {
+    console.log('⏭️ Already animated handId:', handId, '- skipping');
+    return;
+  }
+
+  // Reset animations first
+  setDealtCards({
+    sbCard1: false,
+    bbCard1: false,
+    sbCard2: false,
+    bbCard2: false,
+    flop1: false,
+    flop2: false,
+    flop3: false,
+    turn: false,
+    river: false,
+  });
+
+  // Reset flip animations for new hand
+  setFlippedCards({
+    oppCard1: false,
+    oppCard2: false,
+    myCard1: false,
+    myCard2: false,
+  });
+
+  if (!hasCards) {
+    console.log('❌ No cards - skipping animation');
+    return;
+  }
+
+  // Mark this hand as animated
+  lastAnimatedHandRef.current = handId;
+  console.log('🔒 Locked animation for handId:', handId);
+
+  // Deal hole cards sequentially: SB card 1, BB card 1, SB card 2, BB card 2
+  const dealHoleCards = async () => {
+    console.log('▶️ Starting card dealing...');
+
+    // Start immediately
+    console.log('✅ SB card 1');
+    setDealtCards(prev => ({ ...prev, sbCard1: true }));
+
+    await new Promise(r => setTimeout(r, 100));
+    console.log('✅ BB card 1');
+    setDealtCards(prev => ({ ...prev, bbCard1: true }));
+
+    await new Promise(r => setTimeout(r, 100));
+    console.log('✅ SB card 2');
+    setDealtCards(prev => ({ ...prev, sbCard2: true }));
+
+    await new Promise(r => setTimeout(r, 100));
+    console.log('✅ BB card 2');
+    setDealtCards(prev => ({ ...prev, bbCard2: true }));
+
+    console.log('🎉 All cards dealt!');
+  };
+
+  dealHoleCards();
+}, [handId, cards, mpState?.cards]); // Trigger for both host and joiner
+
+// Debug: Log dealtCards state changes
+useEffect(() => {
+  console.log('📊 dealtCards state:', dealtCards);
+}, [dealtCards]);
+
 const [studentProfile, setStudentProfile] = useState({
   firstName: "",
   lastName: "",
@@ -1268,6 +1380,8 @@ const [showPassword, setShowPassword] = useState(false);
 const [showLoginPassword, setShowLoginPassword] = useState(false);
 
 const [studentMenuOpen, setStudentMenuOpen] = useState(false);
+const [themeMenuOpen, setThemeMenuOpen] = useState(false);
+const [selectedTheme, setSelectedTheme] = useState<string>("default");
 
 const [otherStudents, setOtherStudents] = useState<{ id: string; firstName: string; lastName: string; year: string; major: string; school: string; linkedinUrl: string | null }[]>([]);
 
@@ -2339,12 +2453,102 @@ const displayBottomShowed = multiplayerActive && mpState ? mpState.bottomShowed 
   // Perspective helpers: map game seats to screen positions
   const myActualSeat = mySeat; // "bottom" for host, "top" for joiner
   const oppActualSeat: Seat = mySeat === "bottom" ? "top" : "bottom";
-  
+
+  // Trigger board card animations based on street
+  useEffect(() => {
+    console.log('🃏 Board animation effect - displayStreet:', displayStreet);
+    if (displayStreet < 3) {
+      console.log('⏭️ DisplayStreet < 3, no board cards yet');
+      return; // No board cards yet
+    }
+
+    const dealBoardCards = async () => {
+      if (displayStreet >= 3) {
+        // Flop (3 cards)
+        console.log('🌊 Dealing flop...');
+        await new Promise(r => setTimeout(r, 200));
+        console.log('✅ Flop card 1');
+        setDealtCards(prev => ({ ...prev, flop1: true }));
+
+        await new Promise(r => setTimeout(r, 100));
+        console.log('✅ Flop card 2');
+        setDealtCards(prev => ({ ...prev, flop2: true }));
+
+        await new Promise(r => setTimeout(r, 100));
+        console.log('✅ Flop card 3');
+        setDealtCards(prev => ({ ...prev, flop3: true }));
+      }
+
+      if (displayStreet >= 4) {
+        // Turn
+        console.log('🔄 Dealing turn...');
+        await new Promise(r => setTimeout(r, 300));
+        console.log('✅ Turn card');
+        setDealtCards(prev => ({ ...prev, turn: true }));
+      }
+
+      if (displayStreet >= 5) {
+        // River
+        console.log('🌊 Dealing river...');
+        await new Promise(r => setTimeout(r, 300));
+        console.log('✅ River card');
+        setDealtCards(prev => ({ ...prev, river: true }));
+      }
+    };
+
+    dealBoardCards();
+  }, [displayStreet]);
+
   // Determine if I can show hand and if opponent showed
   const canIShow = myActualSeat === "top" ? displayCanShowTop : displayCanShowBottom;
   const didIShow = myActualSeat === "top" ? displayTopShowed : displayBottomShowed;
   const didOppShow = myActualSeat === "top" ? displayBottomShowed : displayTopShowed;
-  
+
+  // Refs to track previous show states
+  const prevOppShowRef = useRef(false);
+  const prevMyShowRef = useRef(false);
+
+  // Trigger flip animation when opponent's cards are revealed
+  useEffect(() => {
+    const oppShouldShow = (
+      // Required to show at showdown
+      (displayHandResult.status === "ended" && displayHandResult.reason === "showdown" && (
+        myActualSeat === "bottom"
+          ? displayOppRevealed  // I'm host: oppRevealed = top showed = opponent showed
+          : !displayYouMucked   // I'm joiner: youMucked = bottom mucked = opponent mucked, so !youMucked = opponent showed
+      ))
+      // OR opponent clicked Show Hand button
+      || didOppShow
+    );
+
+    // Only trigger animation on transition from false to true
+    if (oppShouldShow && !prevOppShowRef.current) {
+      console.log('🔄 Opponent cards revealed - triggering flip animation');
+      setFlippedCards(prev => ({ ...prev, oppCard1: true, oppCard2: true }));
+      // Reset after animation completes
+      setTimeout(() => {
+        setFlippedCards(prev => ({ ...prev, oppCard1: false, oppCard2: false }));
+      }, 500);
+    }
+
+    prevOppShowRef.current = oppShouldShow;
+  }, [displayOppRevealed, displayYouMucked, didOppShow, displayHandResult, myActualSeat]);
+
+  // Trigger flip animation when I click Show Hand
+  useEffect(() => {
+    // Only trigger animation on transition from false to true
+    if (didIShow && !prevMyShowRef.current) {
+      console.log('🔄 My cards revealed - triggering flip animation');
+      setFlippedCards(prev => ({ ...prev, myCard1: true, myCard2: true }));
+      // Reset after animation completes
+      setTimeout(() => {
+        setFlippedCards(prev => ({ ...prev, myCard1: false, myCard2: false }));
+      }, 500);
+    }
+
+    prevMyShowRef.current = didIShow;
+  }, [didIShow]);
+
   // Game state from my perspective
   const myStack = displayGame.stacks[myActualSeat];
 const oppStack = displayGame.stacks[oppActualSeat];
@@ -3812,7 +4016,7 @@ if (street === 5 && currentFacingBet(seat)) {
   actCall("top");
 }
 
-  // opponent takes 10 seconds per decision
+  // opponent takes 6 seconds per decision
   useEffect(() => {
     if (!seatedRole) return;
     if (handResult.status !== "playing") return;
@@ -3829,7 +4033,7 @@ opponentTimerRef.current = window.setTimeout(() => {
     pendingAiOffRef.current = false;
     setAiEnabled(false);
   }
-}, 1000);
+}, 6000);
  
     return () => {
       if (opponentTimerRef.current) window.clearTimeout(opponentTimerRef.current);
@@ -4382,8 +4586,9 @@ if (isReconnecting) {
 
 if (screen === "role") {
 
-  const baseButton =
-    "w-full rounded-3xl border border-white text-white px-6 font-semibold transition-colors duration-200 hover:bg-gray-50 hover:border-gray-300 hover:text-black";
+  const baseButton = selectedTheme === "notebook"
+    ? "w-full px-6 font-caveat text-xl font-bold transition-all duration-200 relative"
+    : "w-full rounded-3xl border border-white/20 text-white px-6 font-semibold transition-all duration-300 hover:bg-white hover:border-white hover:text-black hover:scale-[1.02] hover:shadow-[0_20px_50px_rgba(255,255,255,0.1)] active:scale-[0.98]";
 
   const titleBusy = creatingGame || isCreatingPin;
   const disabledLinkClass = "opacity-40 cursor-not-allowed pointer-events-none";
@@ -4419,12 +4624,47 @@ const joinGame = () => {
 };
 
   return (
-    <main className="relative flex min-h-screen items-center justify-center bg-black px-6">
+    <main className={`relative flex min-h-screen items-center justify-center px-6 overflow-hidden ${
+      selectedTheme === "notebook"
+        ? "bg-[#f5f1e8]"
+        : "bg-gradient-to-br from-gray-900 via-black to-gray-900"
+    }`} style={selectedTheme === "notebook" ? {
+      backgroundImage: `
+        repeating-linear-gradient(
+          0deg,
+          transparent,
+          transparent 31px,
+          rgba(0,0,0,0.08) 31px,
+          rgba(0,0,0,0.08) 33px
+        ),
+        linear-gradient(90deg, rgba(255,100,100,0.15) 0px, transparent 2px),
+        linear-gradient(90deg, rgba(100,100,255,0.15) 60px, transparent 2px)
+      `,
+      backgroundSize: '100% 33px, 100% 100%, 100% 100%'
+    } : {}}>
+
+    {/* Professional theme background elements */}
+    {selectedTheme === "default" && (
+      <>
+        <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 via-purple-500/5 to-pink-500/5 animate-gradient-shift"></div>
+        <div className="absolute inset-0 opacity-[0.02]" style={{
+          backgroundImage: 'radial-gradient(circle at 1px 1px, white 1px, transparent 0)',
+          backgroundSize: '40px 40px'
+        }}></div>
+      </>
+    )}
+
+    {/* Notebook texture overlay */}
+    {selectedTheme === "notebook" && (
+      <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{
+        backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'200\' height=\'200\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noise\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'4\' /%3E%3C/filter%3E%3Crect width=\'200\' height=\'200\' filter=\'url(%23noise)\' /%3E%3C/svg%3E")',
+      }} />
+    )}
 
     <div
-  className={`absolute top-6 right-6 flex items-center gap-4 ${
-    titleBusy ? "opacity-30 pointer-events-none" : ""
-  }`}
+  className={`absolute top-6 right-6 flex items-center gap-4 z-10 ${
+    selectedTheme === "default" ? "animate-fade-in" : ""
+  } ${titleBusy ? "opacity-30 pointer-events-none" : ""}`}
 >
  {studentProfile.firstName && studentProfile.lastName && !gamePin ? (
   <>
@@ -4490,7 +4730,11 @@ const joinGame = () => {
           : "dashboard"
       )
     }
-    className="text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-white underline opacity-80 hover:opacity-100"
+    className={`text-sm min-[1536px]:max-[1650px]:text-xs font-semibold ${
+      selectedTheme === "notebook"
+        ? "font-caveat text-lg text-gray-800 hover:text-[#2563eb] no-underline"
+        : "text-white underline opacity-80 hover:opacity-100"
+    }`}
   >
     Dashboard
   </button>
@@ -4506,7 +4750,11 @@ const joinGame = () => {
           clearTimers();
           navigateTo("studentLogin");
         }}
-        className="text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-white underline opacity-80 hover:opacity-100"
+        className={`text-sm min-[1536px]:max-[1650px]:text-xs font-semibold ${
+          selectedTheme === "notebook"
+            ? "font-caveat text-lg text-gray-800 hover:text-[#2563eb] no-underline"
+            : "text-white underline opacity-80 hover:opacity-100"
+        }`}
       >
         Log in
       </button>
@@ -4522,7 +4770,11 @@ const joinGame = () => {
           setSeatedRole(null);
           navigateTo("studentProfile");
         }}
-        className="text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-white underline opacity-80 hover:opacity-100"
+        className={`text-sm min-[1536px]:max-[1650px]:text-xs font-semibold ${
+          selectedTheme === "notebook"
+            ? "font-caveat text-lg text-gray-800 hover:text-[#16a34a] no-underline"
+            : "text-white underline opacity-80 hover:opacity-100"
+        }`}
       >
         Sign up
       </button>
@@ -4533,7 +4785,11 @@ const joinGame = () => {
           setIsGuestBrowsing(true);
           navigateTo("dashboard");
         }}
-        className="text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-white underline opacity-80 hover:opacity-100"
+        className={`text-sm min-[1536px]:max-[1650px]:text-xs font-semibold ${
+          selectedTheme === "notebook"
+            ? "font-caveat text-lg text-gray-800 hover:text-[#dc2626] no-underline"
+            : "text-white underline opacity-80 hover:opacity-100"
+        }`}
       >
         Explore
       </button>
@@ -4544,36 +4800,167 @@ const joinGame = () => {
           clearTimers();
           navigateTo("about");
         }}
-        className="text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-white underline opacity-80 hover:opacity-100"
+        className={`text-sm min-[1536px]:max-[1650px]:text-xs font-semibold ${
+          selectedTheme === "notebook"
+            ? "font-caveat text-lg text-gray-800 hover:text-[#ea580c] no-underline"
+            : "text-white underline opacity-80 hover:opacity-100"
+        }`}
       >
         About
       </button>
+
+      {/* THEME BUTTON - Temporarily hidden, notebook theme code preserved below */}
+      {/* <div className="relative">
+        <button
+          type="button"
+          onClick={() => setThemeMenuOpen((o) => !o)}
+          className={`text-sm min-[1536px]:max-[1650px]:text-xs font-semibold ${
+            selectedTheme === "notebook"
+              ? "font-caveat text-lg text-gray-800 hover:text-[#9333ea] no-underline"
+              : "text-white underline opacity-80 hover:opacity-100"
+          }`}
+        >
+          Theme
+        </button>
+
+        {themeMenuOpen && (
+          <div className="absolute right-0 mt-2 w-56 rounded-xl border bg-white shadow-lg z-10">
+            <div className="p-2">
+              <div className="px-3 py-2 text-xs font-semibold text-gray-500 uppercase">
+                Select Theme
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedTheme("default");
+                  setThemeMenuOpen(false);
+                }}
+                className={`w-full flex flex-col items-start px-3 py-2.5 text-left rounded-lg hover:bg-gray-100 ${
+                  selectedTheme === "default" ? "bg-gray-100" : ""
+                }`}
+              >
+                <span className="text-sm font-semibold text-black">Default</span>
+                <span className="text-xs text-gray-500">Simple black & white</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedTheme("notebook");
+                  setThemeMenuOpen(false);
+                }}
+                className={`w-full flex flex-col items-start px-3 py-2.5 text-left rounded-lg hover:bg-gray-100 ${
+                  selectedTheme === "notebook" ? "bg-gray-100" : ""
+                }`}
+              >
+                <span className="text-sm font-semibold text-black">Notebook</span>
+                <span className="text-xs text-gray-500">Hand-drawn infographic style</span>
+              </button>
+            </div>
+          </div>
+        )}
+      </div> */}
     </>
   ) : null
 )}
 
 </div>
 
-      <div className="w-full max-w-xl min-[1536px]:max-[1650px]:max-w-[450px] flex flex-col">
-        <h1 className="mb-3 min-[1536px]:max-[1650px]:mb-2 text-center text-3xl min-[1536px]:max-[1650px]:text-2xl font-bold text-white">
+      <div className="w-full max-w-xl min-[1536px]:max-[1650px]:max-w-[450px] flex flex-col relative z-10">
+        {selectedTheme === "notebook" && (
+          <>
+            {/* Hand-drawn arrow pointing to title */}
+            <div className="absolute -left-32 top-8 text-[#2563eb] opacity-70 rotate-[-5deg]">
+              <svg width="80" height="60" viewBox="0 0 80 60" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M2 30 Q 40 25, 60 28 L 55 20 M 60 28 L 52 32" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" fill="none"/>
+              </svg>
+              <span className="text-xs font-caveat block -mt-2 ml-2">Check this out!</span>
+            </div>
+
+            {/* Coffee cup doodle */}
+            <div className="absolute -right-28 top-12 text-[#dc2626] opacity-60 rotate-[8deg]">
+              <svg width="40" height="50" viewBox="0 0 40 50" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M8 15 Q 8 12, 10 10 L 30 10 Q 32 12, 32 15 L 30 35 Q 30 38, 27 40 L 13 40 Q 10 38, 10 35 Z" stroke="currentColor" strokeWidth="2" fill="none"/>
+                <path d="M32 20 L 36 20 Q 38 20, 38 23 L 38 27 Q 38 30, 36 30 L 32 30" stroke="currentColor" strokeWidth="2" fill="none"/>
+                <path d="M12 45 L 28 45" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"/>
+              </svg>
+            </div>
+          </>
+        )}
+
+        <h1 className={`mb-3 min-[1536px]:max-[1650px]:mb-2 text-center font-bold relative ${
+          selectedTheme === "notebook"
+            ? "text-6xl min-[1536px]:max-[1650px]:text-5xl font-permanent-marker text-[#1e40af] transform -rotate-1"
+            : "text-5xl min-[1536px]:max-[1650px]:text-4xl text-white tracking-tight animate-slide-up"
+        }`}>
+          {selectedTheme === "notebook" && (
+            <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-64 h-3 bg-yellow-200 opacity-40 -rotate-1 -z-10"></span>
+          )}
           HeadsUp
         </h1>
-        <p className="mb-8 min-[1536px]:max-[1650px]:mb-6 text-center text-sm min-[1536px]:max-[1650px]:text-xs text-white/70">
-          Making coffee chats more memorable and engaging through structured interaction.
+
+        <p className={`mb-12 min-[1536px]:max-[1650px]:mb-8 text-center relative ${
+          selectedTheme === "notebook"
+            ? "text-lg min-[1536px]:max-[1650px]:text-base font-caveat text-gray-700 leading-relaxed px-8"
+            : "text-base min-[1536px]:max-[1650px]:text-sm text-white/60 leading-relaxed max-w-md mx-auto animate-slide-up-delay-1"
+        }`}>
+          {selectedTheme === "notebook" ? (
+            <>
+              <span className="inline-block transform -rotate-1">Making coffee chats more</span>
+              <br />
+              <span className="inline-block transform rotate-1">memorable & engaging through</span>
+              <br />
+              <span className="inline-block">structured interaction</span>
+            </>
+          ) : (
+            "Making coffee chats more memorable and engaging through structured interaction."
+          )}
         </p>
 
       <div className="h-[220px] min-[1536px]:max-[1650px]:h-[180px] flex flex-col justify-start">
 
     {/* CREATE GAME PIN VIEW */}
 {gamePin && !joinMode && (
-  <div className="flex flex-col items-center gap-6">
-    <div className="text-lg min-[1536px]:max-[1650px]:text-sm font-semibold tabular-nums text-white">
-      Game PIN: <span className="font-bold">{gamePin}</span>
+  <div className="flex flex-col items-center gap-6 relative">
+    {selectedTheme === "notebook" && (
+      <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 text-[#dc2626] font-caveat text-sm rotate-[-3deg]">
+        Share this PIN! ↓
+      </div>
+    )}
+    <div className={`${
+      selectedTheme === "notebook"
+        ? "text-3xl font-permanent-marker text-[#2563eb] px-8 py-4 relative"
+        : "text-lg min-[1536px]:max-[1650px]:text-sm font-semibold tabular-nums text-white"
+    }`} style={selectedTheme === "notebook" ? {
+      background: 'rgba(191, 219, 254, 0.3)',
+      border: '4px solid #2563eb',
+      borderRadius: '12px 18px 15px 20px',
+      boxShadow: '4px 4px 0px rgba(37, 99, 235, 0.2)'
+    } : {}}>
+      {selectedTheme === "notebook" ? (
+        <>
+          <span className="text-lg font-caveat block mb-1 text-gray-700">Game PIN:</span>
+          <span className="font-bold tracking-wider">{gamePin}</span>
+        </>
+      ) : (
+        <>Game PIN: <span className="font-bold">{gamePin}</span></>
+      )}
     </div>
 
     <button
       onClick={clearPin}
-      className={`${baseButton} py-4 min-[1536px]:max-[1650px]:py-3 text-base min-[1536px]:max-[1650px]:text-xs max-w-sm min-[1536px]:max-[1650px]:max-w-[280px]`}
+      className={`${baseButton} ${
+        selectedTheme === "notebook"
+          ? "py-4 text-xl text-gray-700 hover:scale-105 transform rotate-[1deg]"
+          : "py-4 min-[1536px]:max-[1650px]:py-3 text-base min-[1536px]:max-[1650px]:text-xs"
+      } max-w-sm min-[1536px]:max-[1650px]:max-w-[280px]`}
+      style={selectedTheme === "notebook" ? {
+        background: 'rgba(229, 229, 229, 0.5)',
+        border: '2px solid #6b7280',
+        borderRadius: '10px 15px 12px 16px',
+        boxShadow: '2px 3px 0px rgba(107, 114, 128, 0.2)'
+      } : {}}
     >
       Back
     </button>
@@ -4582,7 +4969,12 @@ const joinGame = () => {
 
   {/* JOIN GAME INPUT VIEW */}
   {!gamePin && joinMode && (
-    <div className="flex flex-col items-center gap-6">
+    <div className="flex flex-col items-center gap-6 relative">
+      {selectedTheme === "notebook" && (
+        <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 text-[#16a34a] font-caveat text-sm rotate-[2deg]">
+          Enter the 4-digit PIN ↓
+        </div>
+      )}
       <input
         type="text"
         inputMode="numeric"
@@ -4596,23 +4988,52 @@ const joinGame = () => {
             joinPinGame();
           }
         }}
-        placeholder="Enter Game PIN"
-        className="w-full max-w-xs min-[1536px]:max-[1650px]:max-w-[224px] rounded-xl min-[1536px]:max-[1650px]:rounded-lg border border-white px-4 py-3 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-2 text-center text-lg min-[1536px]:max-[1650px]:text-sm tracking-widest tabular-nums text-white placeholder:text-white/50 bg-transparent"
+        placeholder={selectedTheme === "notebook" ? "- - - -" : "Enter Game PIN"}
+        className={`w-full max-w-xs min-[1536px]:max-[1650px]:max-w-[224px] px-4 py-3 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-2 text-center tracking-widest tabular-nums ${
+          selectedTheme === "notebook"
+            ? "text-3xl font-permanent-marker text-[#dc2626] placeholder:text-[#dc2626]/30 bg-white/60"
+            : "rounded-xl min-[1536px]:max-[1650px]:rounded-lg border border-white text-lg min-[1536px]:max-[1650px]:text-sm text-white placeholder:text-white/50 bg-transparent"
+        }`}
+        style={selectedTheme === "notebook" ? {
+          border: '3px solid #dc2626',
+          borderRadius: '8px 12px 10px 14px',
+          boxShadow: '3px 3px 0px rgba(220, 38, 38, 0.2)'
+        } : {}}
       />
 
       <button
   onClick={joinPinGame}
   disabled={joinPinInput.length !== 4}
-  className={`${baseButton} py-4 min-[1536px]:max-[1650px]:py-3 text-base min-[1536px]:max-[1650px]:text-xs max-w-sm min-[1536px]:max-[1650px]:max-w-[280px] ${
+  className={`${baseButton} ${
+    selectedTheme === "notebook"
+      ? "py-5 text-xl text-[#16a34a] hover:scale-105 transform rotate-[-1deg]"
+      : "py-4 min-[1536px]:max-[1650px]:py-3 text-base min-[1536px]:max-[1650px]:text-xs"
+  } max-w-sm min-[1536px]:max-[1650px]:max-w-[280px] ${
     joinPinInput.length !== 4 ? "opacity-50 pointer-events-none" : ""
   }`}
+  style={selectedTheme === "notebook" ? {
+    background: 'rgba(134, 239, 172, 0.3)',
+    border: '3px solid #16a34a',
+    borderRadius: '12px 16px 14px 18px',
+    boxShadow: '3px 4px 0px rgba(22, 163, 74, 0.2)'
+  } : {}}
 >
   Join game
 </button>
 
 <button
   onClick={clearPin}
-  className={`${baseButton} py-4 min-[1536px]:max-[1650px]:py-3 text-base min-[1536px]:max-[1650px]:text-xs max-w-sm min-[1536px]:max-[1650px]:max-w-[280px]`}
+  className={`${baseButton} ${
+    selectedTheme === "notebook"
+      ? "py-4 text-xl text-gray-700 hover:scale-105 transform rotate-[1deg]"
+      : "py-4 min-[1536px]:max-[1650px]:py-3 text-base min-[1536px]:max-[1650px]:text-xs"
+  } max-w-sm min-[1536px]:max-[1650px]:max-w-[280px]`}
+  style={selectedTheme === "notebook" ? {
+    background: 'rgba(229, 229, 229, 0.5)',
+    border: '2px solid #6b7280',
+    borderRadius: '10px 15px 12px 16px',
+    boxShadow: '2px 3px 0px rgba(107, 114, 128, 0.2)'
+  } : {}}
 >
   Back
 </button>
@@ -4621,21 +5042,27 @@ const joinGame = () => {
 
   {/* DEFAULT TITLE SCREEN BUTTONS */}
   {!gamePin && !joinMode && (
-    <div className="flex flex-col gap-4">
+    <div className={`flex flex-col gap-5 ${selectedTheme === "default" ? "animate-slide-up-delay-2" : "gap-6"}`}>
       <button
   type="button"
   onClick={createGame}
   disabled={creatingGame}
   className={`
     ${baseButton}
-    py-10
-    min-[1536px]:max-[1650px]:py-7
-    text-xl
-    min-[1536px]:max-[1650px]:text-base
+    ${selectedTheme === "notebook"
+      ? "py-8 text-2xl text-[#16a34a] hover:scale-105 transform rotate-[-1deg]"
+      : "py-10 min-[1536px]:max-[1650px]:py-7 text-xl min-[1536px]:max-[1650px]:text-base bg-gradient-to-r from-white/5 to-white/10 backdrop-blur-sm"
+    }
     ${creatingGame
       ? "opacity-60 cursor-not-allowed pointer-events-none"
       : ""}
   `}
+  style={selectedTheme === "notebook" ? {
+    background: 'rgba(134, 239, 172, 0.2)',
+    border: '3px solid #16a34a',
+    borderRadius: '15px 20px 18px 22px',
+    boxShadow: '3px 4px 0px rgba(22, 163, 74, 0.3)'
+  } : {}}
 >
   {creatingGame ? "Creating..." : "Create Game"}
 </button>
@@ -4645,12 +5072,18 @@ const joinGame = () => {
   disabled={creatingGame}
   className={`
     ${baseButton}
-    py-10
-    min-[1536px]:max-[1650px]:py-7
-    text-xl
-    min-[1536px]:max-[1650px]:text-base
+    ${selectedTheme === "notebook"
+      ? "py-8 text-2xl text-[#dc2626] hover:scale-105 transform rotate-[1deg]"
+      : "py-10 min-[1536px]:max-[1650px]:py-7 text-xl min-[1536px]:max-[1650px]:text-base bg-gradient-to-r from-white/5 to-white/10 backdrop-blur-sm"
+    }
     ${creatingGame ? "opacity-60 cursor-not-allowed pointer-events-none" : ""}
   `}
+  style={selectedTheme === "notebook" ? {
+    background: 'rgba(252, 165, 165, 0.2)',
+    border: '3px solid #dc2626',
+    borderRadius: '18px 15px 22px 17px',
+    boxShadow: '3px 4px 0px rgba(220, 38, 38, 0.3)'
+  } : {}}
 >
   Join Game
 </button>
@@ -4667,9 +5100,52 @@ const joinGame = () => {
 
 if (screen === "studentProfile") {
   return (
-    <main className="relative flex min-h-screen items-center justify-center bg-black px-6 min-[1536px]:max-[1650px]:scale-[0.85] min-[1536px]:max-[1650px]:origin-center">
-      <div className="w-full max-w-md">
-        <h1 className="mb-6 text-center text-3xl font-bold text-white">Sign up</h1>
+    <main className={`relative flex min-h-screen items-center justify-center px-6 min-[1536px]:max-[1650px]:scale-[0.85] min-[1536px]:max-[1650px]:origin-center overflow-hidden ${
+      selectedTheme === "notebook"
+        ? "bg-[#f5f1e8]"
+        : "bg-gradient-to-br from-gray-900 via-black to-gray-900"
+    }`} style={selectedTheme === "notebook" ? {
+      backgroundImage: `
+        repeating-linear-gradient(
+          0deg,
+          transparent,
+          transparent 31px,
+          rgba(0,0,0,0.08) 31px,
+          rgba(0,0,0,0.08) 33px
+        ),
+        linear-gradient(90deg, rgba(255,100,100,0.15) 0px, transparent 2px),
+        linear-gradient(90deg, rgba(100,100,255,0.15) 60px, transparent 2px)
+      `,
+      backgroundSize: '100% 33px, 100% 100%, 100% 100%'
+    } : {}}>
+
+      {selectedTheme === "default" && (
+        <>
+          <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 via-purple-500/5 to-pink-500/5 animate-gradient-shift"></div>
+          <div className="absolute inset-0 opacity-[0.02]" style={{
+            backgroundImage: 'radial-gradient(circle at 1px 1px, white 1px, transparent 0)',
+            backgroundSize: '40px 40px'
+          }}></div>
+        </>
+      )}
+
+      {selectedTheme === "notebook" && (
+        <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{
+          backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'200\' height=\'200\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noise\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'4\' /%3E%3C/filter%3E%3Crect width=\'200\' height=\'200\' filter=\'url(%23noise)\' /%3E%3C/svg%3E")',
+        }} />
+      )}
+
+      <div className={`w-full max-w-md relative z-10 ${selectedTheme === "default" ? "animate-slide-up" : ""}`}>
+        <h1 className={`mb-6 text-center font-bold ${
+          selectedTheme === "notebook"
+            ? "text-4xl font-permanent-marker text-[#1e40af] transform -rotate-1"
+            : "text-3xl text-white tracking-tight"
+        }`}>
+          {selectedTheme === "notebook" && (
+            <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-32 h-3 bg-yellow-200 opacity-40 -rotate-1 -z-10"></span>
+          )}
+          Sign up
+        </h1>
 
 <fieldset disabled={creatingAccount} className={creatingAccount ? "opacity-50" : ""}>
 <div className="mb-6 flex gap-3">
@@ -4677,11 +5153,18 @@ if (screen === "studentProfile") {
   type="button"
   disabled={creatingAccount}
   onClick={() => setSeatedRole("student")}
-  className={`flex-1 rounded-2xl border border-white text-white px-4 py-3 text-sm font-semibold transition-colors ${
-    creatingAccount ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-50 hover:text-black"
+  className={`flex-1 px-4 py-3 text-sm font-semibold transition-all duration-300 ${
+    selectedTheme === "notebook"
+      ? `font-caveat text-lg ${seatedRole === "student" ? "bg-blue-100 text-[#2563eb]" : "text-gray-700"}`
+      : `rounded-2xl border border-white/20 text-white hover:scale-[1.02] ${seatedRole === "student" ? "bg-white/10 border-white" : ""}`
   } ${
-    seatedRole === "student" ? "border-white bg-white/10" : ""
+    creatingAccount ? "opacity-50 cursor-not-allowed" : selectedTheme === "default" ? "hover:bg-white hover:text-black" : "hover:bg-blue-50"
   }`}
+  style={selectedTheme === "notebook" ? {
+    border: seatedRole === "student" ? '2px solid #2563eb' : '2px solid #9ca3af',
+    borderRadius: '8px 12px 10px 14px',
+    boxShadow: seatedRole === "student" ? '2px 2px 0px rgba(37, 99, 235, 0.2)' : 'none'
+  } : {}}
 >
   Student
 </button>
@@ -4690,11 +5173,18 @@ if (screen === "studentProfile") {
   type="button"
   disabled={creatingAccount}
   onClick={() => setSeatedRole("professional")}
-  className={`flex-1 rounded-2xl border border-white text-white px-4 py-3 text-sm font-semibold transition-colors ${
-    creatingAccount ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-50 hover:text-black"
+  className={`flex-1 px-4 py-3 text-sm font-semibold transition-all duration-300 ${
+    selectedTheme === "notebook"
+      ? `font-caveat text-lg ${seatedRole === "professional" ? "bg-green-100 text-[#16a34a]" : "text-gray-700"}`
+      : `rounded-2xl border border-white/20 text-white hover:scale-[1.02] ${seatedRole === "professional" ? "bg-white/10 border-white" : ""}`
   } ${
-    seatedRole === "professional" ? "border-white bg-white/10" : ""
+    creatingAccount ? "opacity-50 cursor-not-allowed" : selectedTheme === "default" ? "hover:bg-white hover:text-black" : "hover:bg-green-50"
   }`}
+  style={selectedTheme === "notebook" ? {
+    border: seatedRole === "professional" ? '2px solid #16a34a' : '2px solid #9ca3af',
+    borderRadius: '10px 8px 14px 10px',
+    boxShadow: seatedRole === "professional" ? '2px 2px 0px rgba(22, 163, 74, 0.2)' : 'none'
+  } : {}}
 >
   Professional
 </button>
@@ -5005,9 +5495,46 @@ if (screen === "studentProfile") {
 
 if (screen === "studentLogin") {
   return (
-    <main className="relative flex min-h-screen items-center justify-center bg-black px-6 min-[1536px]:max-[1650px]:scale-[0.85] min-[1536px]:max-[1650px]:origin-center">
-      <div className="w-full max-w-md">
-        <h1 className="mb-6 text-center text-3xl font-bold text-white">Log in</h1>
+    <main className={`relative flex min-h-screen items-center justify-center px-6 min-[1536px]:max-[1650px]:scale-[0.85] min-[1536px]:max-[1650px]:origin-center overflow-hidden ${
+      selectedTheme === "notebook"
+        ? "bg-[#f5f1e8]"
+        : "bg-gradient-to-br from-gray-900 via-black to-gray-900"
+    }`} style={selectedTheme === "notebook" ? {
+      backgroundImage: `
+        repeating-linear-gradient(0deg, transparent, transparent 31px, rgba(0,0,0,0.08) 31px, rgba(0,0,0,0.08) 33px),
+        linear-gradient(90deg, rgba(255,100,100,0.15) 0px, transparent 2px),
+        linear-gradient(90deg, rgba(100,100,255,0.15) 60px, transparent 2px)
+      `,
+      backgroundSize: '100% 33px, 100% 100%, 100% 100%'
+    } : {}}>
+
+      {selectedTheme === "default" && (
+        <>
+          <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 via-purple-500/5 to-pink-500/5 animate-gradient-shift"></div>
+          <div className="absolute inset-0 opacity-[0.02]" style={{
+            backgroundImage: 'radial-gradient(circle at 1px 1px, white 1px, transparent 0)',
+            backgroundSize: '40px 40px'
+          }}></div>
+        </>
+      )}
+
+      {selectedTheme === "notebook" && (
+        <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{
+          backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'200\' height=\'200\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noise\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'4\' /%3E%3C/filter%3E%3Crect width=\'200\' height=\'200\' filter=\'url(%23noise)\' /%3E%3C/svg%3E")',
+        }} />
+      )}
+
+      <div className={`w-full max-w-md relative z-10 ${selectedTheme === "default" ? "animate-slide-up" : ""}`}>
+        <h1 className={`mb-6 text-center font-bold ${
+          selectedTheme === "notebook"
+            ? "text-4xl font-permanent-marker text-[#1e40af] transform -rotate-1"
+            : "text-3xl text-white tracking-tight"
+        }`}>
+          {selectedTheme === "notebook" && (
+            <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-24 h-3 bg-yellow-200 opacity-40 -rotate-1 -z-10"></span>
+          )}
+          Log in
+        </h1>
 
         <div className="flex flex-col gap-4">
           <input
@@ -5141,8 +5668,25 @@ if (screen === "dashboard" && (seatedRole === "student" || isGuestBrowsing)) {
     "w-full rounded-3xl border px-6 font-semibold transition-colors duration-200 hover:bg-gray-50 hover:border-gray-300";
 
   return (
-   <main className="flex min-h-screen justify-center bg-black px-6 pt-16 min-[1536px]:max-[1650px]:scale-[0.85] min-[1536px]:max-[1650px]:origin-center">
-  
+   <main
+      className={`flex min-h-screen justify-center px-6 pt-16 min-[1536px]:max-[1650px]:scale-[0.85] min-[1536px]:max-[1650px]:origin-center ${selectedTheme === "notebook" ? "bg-[#f5f1e8]" : "bg-gradient-to-br from-gray-900 via-black to-gray-900"}`}
+      style={selectedTheme === "notebook" ? {
+        backgroundImage: `repeating-linear-gradient(0deg, transparent, transparent 31px, rgba(0,0,0,0.08) 31px, rgba(0,0,0,0.08) 33px), linear-gradient(90deg, rgba(255,100,100,0.15) 0px, transparent 2px), linear-gradient(90deg, rgba(100,100,255,0.15) 60px, transparent 2px)`,
+        backgroundSize: '100% 33px, 100% 100%, 100% 100%'
+      } : {}}
+    >
+
+  {selectedTheme === "default" && (
+    <>
+      <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 via-purple-500/5 to-pink-500/5 animate-gradient-shift"></div>
+      <div className="absolute inset-0 opacity-[0.02]" style={{backgroundImage: 'radial-gradient(circle at 1px 1px, white 1px, transparent 0)', backgroundSize: '40px 40px'}}></div>
+    </>
+  )}
+
+  {selectedTheme === "notebook" && (
+    <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'200\' height=\'200\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noise\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'4\' /%3E%3C/filter%3E%3Crect width=\'200\' height=\'200\' filter=\'url(%23noise)\' /%3E%3C/svg%3E")'}}/>
+  )}
+
   {/* Founder Connect Modal for guest users */}
   {showFounderConnectModal && (
     <div className="fixed inset-0 z-50 flex items-center justify-center px-6">
@@ -5235,9 +5779,12 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
       </div>
     </div>
   )}
-  <div className="w-full max-w-[96rem]">
+  <div className={`w-full max-w-[96rem] relative z-10 ${selectedTheme === "default" ? "animate-slide-up" : ""}`}>
        <div className="mb-2 flex items-center justify-center gap-4">
-  <h1 className="text-3xl font-bold text-white">
+  <h1 className={`text-3xl font-bold relative ${selectedTheme === "notebook" ? "font-permanent-marker text-[#1e40af] transform -rotate-1" : "text-white tracking-tight"}`}>
+    {selectedTheme === "notebook" && (
+      <span className="absolute -inset-2 bg-yellow-200/40 -z-10 transform rotate-1 rounded"></span>
+    )}
     {isGuestBrowsing ? "Explore the community" : "Student dashboard"}
   </h1>
 
@@ -5248,7 +5795,11 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
         onClick={() => {
           navigateTo("studentProfile");
         }}
-        className="rounded-xl border border-white bg-white text-black px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-100"
+        className={`rounded-xl px-4 py-1.5 text-sm font-semibold transition-all ${
+          selectedTheme === "notebook"
+            ? "border-2 border-[#1e40af] bg-[#1e40af] text-white hover:bg-[#1e3a8a] hover:border-[#1e3a8a] hover:-translate-y-0.5 hover:shadow-lg"
+            : "border border-white bg-white text-black hover:bg-gray-100"
+        }`}
       >
         Sign up to connect
       </button>
@@ -5258,7 +5809,11 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
           setIsGuestBrowsing(false);
           goBack();
         }}
-        className="rounded-xl border border-white text-white px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50 hover:text-black"
+        className={`rounded-xl px-4 py-1.5 text-sm font-semibold transition-all ${
+          selectedTheme === "notebook"
+            ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
+            : "border border-white text-white hover:bg-gray-50 hover:text-black"
+        }`}
       >
         Back
       </button>
@@ -5271,7 +5826,11 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
           setEditProfileReturnScreen("dashboard");
           setScreen("editProfile");
         }}
-        className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black"
+        className={`rounded-xl px-3 py-1 text-xs font-semibold transition-all ${
+          selectedTheme === "notebook"
+            ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
+            : "border border-white text-white hover:bg-gray-50 hover:text-black"
+        }`}
       >
         Edit Profile
       </button>
@@ -5279,14 +5838,18 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
       {/* Game PIN display */}
       {gamePin && !joinMode && (
         <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold text-white">PIN: {gamePin}</span>
+          <span className={`text-sm font-semibold ${selectedTheme === "notebook" ? "text-[#1e40af]" : "text-white"}`}>PIN: {gamePin}</span>
           <button
             type="button"
             onClick={() => {
               clearPin();
               setGamePin(null);
             }}
-            className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black"
+            className={`rounded-xl px-3 py-1 text-xs font-semibold transition-all ${
+              selectedTheme === "notebook"
+                ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
+                : "border border-white text-white hover:bg-gray-50 hover:text-black"
+            }`}
           >
             Cancel
           </button>
@@ -5308,13 +5871,21 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
               }
             }}
             placeholder="Enter PIN"
-            className="w-24 rounded-lg border border-white px-2 py-1 text-center text-sm tracking-widest text-white placeholder:text-white/50 bg-transparent"
+            className={`w-24 rounded-lg px-2 py-1 text-center text-sm tracking-widest bg-transparent ${
+              selectedTheme === "notebook"
+                ? "border-2 border-[#1e40af] text-[#1e40af] placeholder:text-[#1e40af]/50"
+                : "border border-white text-white placeholder:text-white/50"
+            }`}
           />
           <button
             type="button"
             onClick={() => joinPinGame()}
             disabled={joinPinInput.length !== 4}
-            className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black disabled:opacity-50"
+            className={`rounded-xl px-3 py-1 text-xs font-semibold transition-all disabled:opacity-50 ${
+              selectedTheme === "notebook"
+                ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
+                : "border border-white text-white hover:bg-gray-50 hover:text-black"
+            }`}
           >
             Join
           </button>
@@ -5324,7 +5895,11 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
               setJoinMode(false);
               setJoinPinInput("");
             }}
-            className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black"
+            className={`rounded-xl px-3 py-1 text-xs font-semibold transition-all ${
+              selectedTheme === "notebook"
+                ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
+                : "border border-white text-white hover:bg-gray-50 hover:text-black"
+            }`}
           >
             Cancel
           </button>
@@ -5342,7 +5917,11 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
               setCreatingGame(false);
             }}
             disabled={creatingGame}
-            className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black disabled:opacity-50"
+            className={`rounded-xl px-3 py-1 text-xs font-semibold transition-all disabled:opacity-50 ${
+              selectedTheme === "notebook"
+                ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
+                : "border border-white text-white hover:bg-gray-50 hover:text-black"
+            }`}
           >
             {creatingGame ? "Creating..." : "Create Game"}
           </button>
@@ -5352,7 +5931,11 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
               setJoinMode(true);
               setJoinPinInput("");
             }}
-            className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black"
+            className={`rounded-xl px-3 py-1 text-xs font-semibold transition-all ${
+              selectedTheme === "notebook"
+                ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
+                : "border border-white text-white hover:bg-gray-50 hover:text-black"
+            }`}
           >
             Join Game
           </button>
@@ -5362,11 +5945,19 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
       <button
         type="button"
         onClick={() => setScreen("connections")}
-        className="relative rounded-xl border border-white text-white px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50 hover:text-black"
+        className={`relative rounded-xl px-4 py-1.5 text-sm font-semibold transition-all ${
+          selectedTheme === "notebook"
+            ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
+            : "border border-white text-white hover:bg-gray-50 hover:text-black"
+        }`}
       >
         Connections
         {Array.from(unreadCounts.values()).reduce((a, b) => a + b, 0) > 0 && (
-          <span className="absolute -top-2 -right-2 flex h-5 w-5 items-center justify-center rounded-full bg-white border border-black text-[11px] font-bold text-black">
+          <span className={`absolute -top-2 -right-2 flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold ${
+            selectedTheme === "notebook"
+              ? "bg-yellow-200 border-2 border-[#1e40af] text-[#1e40af]"
+              : "bg-white border border-black text-black"
+          }`}>
             {Array.from(unreadCounts.values()).reduce((a, b) => a + b, 0) > 9 ? '9+' : Array.from(unreadCounts.values()).reduce((a, b) => a + b, 0)}
           </span>
         )}
@@ -5380,7 +5971,11 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
             setScreen("role");
           }
         }}
-        className="rounded-xl border border-white text-white px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50 hover:text-black"
+        className={`rounded-xl px-4 py-1.5 text-sm font-semibold transition-all ${
+          selectedTheme === "notebook"
+            ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
+            : "border border-white text-white hover:bg-gray-50 hover:text-black"
+        }`}
       >
         Title screen
       </button>
@@ -5388,7 +5983,7 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
   )}
 </div>
 
-        <p className="mb-8 text-center text-sm text-black/60">
+        <p className={`mb-8 text-center text-sm ${selectedTheme === "notebook" ? "text-[#1e40af]/60" : "text-black/60"}`}>
           Same aesthetic for now — we'll plug in real widgets next.
         </p>
 
@@ -5454,7 +6049,8 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
       .map((s, i) => (
   <div
     key={i}
-    className="w-full rounded-2xl border border-black bg-white px-5 py-4 font-semibold text-black flex items-center justify-between"
+    className="w-full rounded-2xl border border-black bg-white px-5 py-4 font-semibold text-black flex items-center justify-between animate-slide-up"
+    style={{ animationDelay: `${i * 0.05}s` }}
   >
     <span>
       {s.linkedinUrl ? (
@@ -5497,13 +6093,13 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
         <div className="flex gap-2">
           <button 
             onClick={() => acceptConnection(s.id, pendingIncoming.get(s.id)!.id, `${s.firstName} ${s.lastName}`)}
-            className="rounded-xl border border-green-600 bg-green-50 px-3 py-1.5 text-sm font-semibold text-green-600 hover:bg-green-100"
+            className="rounded-xl border border-green-600 bg-green-50 px-3 py-1.5 text-sm font-semibold text-green-600 transition-all duration-300 hover:bg-green-100 hover:scale-[1.02] hover:shadow-[0_10px_30px_rgba(22,163,74,0.2)]"
           >
             Accept
           </button>
           <button 
             onClick={() => rejectConnection(s.id, pendingIncoming.get(s.id)!.id, `${s.firstName} ${s.lastName}`)}
-            className="rounded-xl border border-red-600 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-600 hover:bg-red-100"
+            className="rounded-xl border border-red-600 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-600 transition-all duration-300 hover:bg-red-100 hover:scale-[1.02] hover:shadow-[0_10px_30px_rgba(220,38,38,0.2)]"
           >
             Reject
           </button>
@@ -5542,7 +6138,8 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
       .map((p, i) => (
   <div
     key={i}
-    className="w-full rounded-2xl border border-black bg-white px-5 py-[13px] font-semibold text-black flex items-center justify-between"
+    className="w-full rounded-2xl border border-black bg-white px-5 py-[13px] font-semibold text-black flex items-center justify-between animate-slide-up"
+    style={{ animationDelay: `${i * 0.05}s` }}
   >
     <span>
       {p.linkedinUrl ? (
@@ -5631,10 +6228,33 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
     "w-full rounded-3xl border px-6 font-semibold transition-colors duration-200 hover:bg-gray-50 hover:border-gray-300";
 
   return (
-   <main className="flex min-h-screen justify-center bg-black px-6 pt-16 min-[1536px]:max-[1650px]:scale-[0.85] min-[1536px]:max-[1650px]:origin-center">
-  <div className="w-full max-w-[96rem]">
+   <main
+      className={`flex min-h-screen justify-center px-6 pt-16 min-[1536px]:max-[1650px]:scale-[0.85] min-[1536px]:max-[1650px]:origin-center ${selectedTheme === "notebook" ? "bg-[#f5f1e8]" : "bg-gradient-to-br from-gray-900 via-black to-gray-900"}`}
+      style={selectedTheme === "notebook" ? {
+        backgroundImage: `repeating-linear-gradient(0deg, transparent, transparent 31px, rgba(0,0,0,0.08) 31px, rgba(0,0,0,0.08) 33px), linear-gradient(90deg, rgba(255,100,100,0.15) 0px, transparent 2px), linear-gradient(90deg, rgba(100,100,255,0.15) 60px, transparent 2px)`,
+        backgroundSize: '100% 33px, 100% 100%, 100% 100%'
+      } : {}}
+    >
+
+  {selectedTheme === "default" && (
+    <>
+      <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 via-purple-500/5 to-pink-500/5 animate-gradient-shift"></div>
+      <div className="absolute inset-0 opacity-[0.02]" style={{backgroundImage: 'radial-gradient(circle at 1px 1px, white 1px, transparent 0)', backgroundSize: '40px 40px'}}></div>
+    </>
+  )}
+
+  {selectedTheme === "notebook" && (
+    <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'200\' height=\'200\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noise\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'4\' /%3E%3C/filter%3E%3Crect width=\'200\' height=\'200\' filter=\'url(%23noise)\' /%3E%3C/svg%3E")'}}/>
+  )}
+
+  <div className={`w-full max-w-[96rem] relative z-10 ${selectedTheme === "default" ? "animate-slide-up" : ""}`}>
        <div className="mb-2 flex items-center justify-center gap-4">
-  <h1 className="text-3xl font-bold text-white">Professional Dashboard</h1>
+  <h1 className={`text-3xl font-bold relative ${selectedTheme === "notebook" ? "font-permanent-marker text-[#1e40af] transform -rotate-1" : "text-white tracking-tight"}`}>
+    {selectedTheme === "notebook" && (
+      <span className="absolute -inset-2 bg-yellow-200/40 -z-10 transform rotate-1 rounded"></span>
+    )}
+    Professional Dashboard
+  </h1>
 
   <button
     type="button"
@@ -5642,7 +6262,11 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
       setEditProfileReturnScreen("professionalDashboard");
       setScreen("editProfile");
     }}
-    className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black"
+    className={`rounded-xl px-3 py-1 text-xs font-semibold transition-all ${
+      selectedTheme === "notebook"
+        ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
+        : "border border-white text-white hover:bg-gray-50 hover:text-black"
+    }`}
   >
     Edit Profile
   </button>
@@ -5650,14 +6274,18 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
   {/* Game PIN display */}
   {gamePin && !joinMode && (
     <div className="flex items-center gap-2">
-      <span className="text-sm font-semibold text-white">PIN: {gamePin}</span>
+      <span className={`text-sm font-semibold ${selectedTheme === "notebook" ? "text-[#1e40af]" : "text-white"}`}>PIN: {gamePin}</span>
       <button
         type="button"
         onClick={() => {
           clearPin();
           setGamePin(null);
         }}
-        className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black"
+        className={`rounded-xl px-3 py-1 text-xs font-semibold transition-all ${
+          selectedTheme === "notebook"
+            ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
+            : "border border-white text-white hover:bg-gray-50 hover:text-black"
+        }`}
       >
         Cancel
       </button>
@@ -5679,13 +6307,21 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
           }
         }}
         placeholder="Enter PIN"
-        className="w-24 rounded-lg border border-white px-2 py-1 text-center text-sm tracking-widest text-white placeholder:text-white/50 bg-transparent"
+        className={`w-24 rounded-lg px-2 py-1 text-center text-sm tracking-widest bg-transparent ${
+          selectedTheme === "notebook"
+            ? "border-2 border-[#1e40af] text-[#1e40af] placeholder:text-[#1e40af]/50"
+            : "border border-white text-white placeholder:text-white/50"
+        }`}
       />
       <button
         type="button"
         onClick={() => joinPinGame()}
         disabled={joinPinInput.length !== 4}
-        className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black disabled:opacity-50"
+        className={`rounded-xl px-3 py-1 text-xs font-semibold transition-all disabled:opacity-50 ${
+          selectedTheme === "notebook"
+            ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
+            : "border border-white text-white hover:bg-gray-50 hover:text-black"
+        }`}
       >
         Join
       </button>
@@ -5695,7 +6331,11 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
           setJoinMode(false);
           setJoinPinInput("");
         }}
-        className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black"
+        className={`rounded-xl px-3 py-1 text-xs font-semibold transition-all ${
+          selectedTheme === "notebook"
+            ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
+            : "border border-white text-white hover:bg-gray-50 hover:text-black"
+        }`}
       >
         Cancel
       </button>
@@ -5713,7 +6353,11 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
           setCreatingGame(false);
         }}
         disabled={creatingGame}
-        className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black disabled:opacity-50"
+        className={`rounded-xl px-3 py-1 text-xs font-semibold transition-all disabled:opacity-50 ${
+          selectedTheme === "notebook"
+            ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
+            : "border border-white text-white hover:bg-gray-50 hover:text-black"
+        }`}
       >
         {creatingGame ? "Creating..." : "Create Game"}
       </button>
@@ -5723,7 +6367,11 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
           setJoinMode(true);
           setJoinPinInput("");
         }}
-        className="rounded-xl border border-white text-white px-3 py-1 text-xs font-semibold transition-colors hover:bg-gray-50 hover:text-black"
+        className={`rounded-xl px-3 py-1 text-xs font-semibold transition-all ${
+          selectedTheme === "notebook"
+            ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
+            : "border border-white text-white hover:bg-gray-50 hover:text-black"
+        }`}
       >
         Join Game
       </button>
@@ -5733,11 +6381,19 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
   <button
     type="button"
     onClick={() => setScreen("connections")}
-    className="relative rounded-xl border border-white text-white px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50 hover:text-black"
+    className={`relative rounded-xl px-4 py-1.5 text-sm font-semibold transition-all ${
+      selectedTheme === "notebook"
+        ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
+        : "border border-white text-white hover:bg-gray-50 hover:text-black"
+    }`}
   >
     Connections
     {Array.from(unreadCounts.values()).reduce((a, b) => a + b, 0) > 0 && (
-      <span className="absolute -top-2 -right-2 flex h-5 w-5 items-center justify-center rounded-full bg-white border border-black text-[11px] font-bold text-black">
+      <span className={`absolute -top-2 -right-2 flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold ${
+        selectedTheme === "notebook"
+          ? "bg-yellow-200 border-2 border-[#1e40af] text-[#1e40af]"
+          : "bg-white border border-black text-black"
+      }`}>
         {Array.from(unreadCounts.values()).reduce((a, b) => a + b, 0) > 9 ? '9+' : Array.from(unreadCounts.values()).reduce((a, b) => a + b, 0)}
       </span>
     )}
@@ -5751,14 +6407,18 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
         setScreen("role");
       }
     }}
-    className="rounded-xl border border-white text-white px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50 hover:text-black"
+    className={`rounded-xl px-4 py-1.5 text-sm font-semibold transition-all ${
+      selectedTheme === "notebook"
+        ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
+        : "border border-white text-white hover:bg-gray-50 hover:text-black"
+    }`}
   >
     Title screen
   </button>
 </div>
 
-        <p className="mb-8 text-center text-sm text-black/60">
-          Same aesthetic for now — we’ll plug in real widgets next.
+        <p className={`mb-8 text-center text-sm ${selectedTheme === "notebook" ? "text-[#1e40af]/60" : "text-black/60"}`}>
+          Same aesthetic for now — we'll plug in real widgets next.
         </p>
 
         <div className="grid gap-4">
@@ -5813,7 +6473,8 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
       .map((p, i) => (
   <div
     key={i}
-    className="w-full rounded-2xl border border-black bg-white px-5 py-[14px] font-semibold text-black flex items-center justify-between"
+    className="w-full rounded-2xl border border-black bg-white px-5 py-[14px] font-semibold text-black flex items-center justify-between animate-slide-up"
+    style={{ animationDelay: `${i * 0.05}s` }}
   >
     <span>
       {p.linkedinUrl ? (
@@ -5885,7 +6546,8 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
       .map((s, i) => (
   <div
     key={i}
-    className="w-full rounded-2xl border border-black bg-white px-5 py-[13px] font-semibold text-black flex items-center justify-between"
+    className="w-full rounded-2xl border border-black bg-white px-5 py-[13px] font-semibold text-black flex items-center justify-between animate-slide-up"
+    style={{ animationDelay: `${i * 0.05}s` }}
   >
     <span>
       {s.linkedinUrl ? (
@@ -6178,8 +6840,12 @@ if (screen === "connections") {
   /* ---------- edit profile ---------- */
 
 if (screen === "editProfile") {
-  const inputClass = "rounded-xl border border-white text-white placeholder:text-white/50 bg-transparent px-4 py-3 text-sm";
-  const buttonClass = "rounded-2xl border border-white text-white px-4 py-3 text-sm font-semibold transition-colors hover:bg-gray-50 hover:text-black";
+  const inputClass = selectedTheme === "notebook"
+    ? "rounded-xl border-2 border-[#1e40af] text-[#1e40af] placeholder:text-[#1e40af]/50 bg-transparent px-4 py-3 text-sm"
+    : "rounded-xl border border-white text-white placeholder:text-white/50 bg-transparent px-4 py-3 text-sm";
+  const buttonClass = selectedTheme === "notebook"
+    ? "rounded-2xl border-2 border-[#1e40af] text-[#1e40af] px-4 py-3 text-sm font-semibold transition-all hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
+    : "rounded-2xl border border-white text-white px-4 py-3 text-sm font-semibold transition-colors hover:bg-gray-50 hover:text-black";
   
   const handleSaveProfile = async () => {
     if (!sbUser?.id) return;
@@ -6243,11 +6909,34 @@ if (screen === "editProfile") {
       setSavingProfile(false);
     }
   };
-  
+
   return (
-    <main className="relative flex min-h-screen items-center justify-center bg-black px-6">
-      <div className="w-full max-w-md">
-        <h1 className="mb-6 text-center text-3xl font-bold text-white">Edit Profile</h1>
+    <main
+      className={`relative flex min-h-screen items-center justify-center px-6 ${selectedTheme === "notebook" ? "bg-[#f5f1e8]" : "bg-gradient-to-br from-gray-900 via-black to-gray-900"}`}
+      style={selectedTheme === "notebook" ? {
+        backgroundImage: `repeating-linear-gradient(0deg, transparent, transparent 31px, rgba(0,0,0,0.08) 31px, rgba(0,0,0,0.08) 33px), linear-gradient(90deg, rgba(255,100,100,0.15) 0px, transparent 2px), linear-gradient(90deg, rgba(100,100,255,0.15) 60px, transparent 2px)`,
+        backgroundSize: '100% 33px, 100% 100%, 100% 100%'
+      } : {}}
+    >
+
+      {selectedTheme === "default" && (
+        <>
+          <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 via-purple-500/5 to-pink-500/5 animate-gradient-shift"></div>
+          <div className="absolute inset-0 opacity-[0.02]" style={{backgroundImage: 'radial-gradient(circle at 1px 1px, white 1px, transparent 0)', backgroundSize: '40px 40px'}}></div>
+        </>
+      )}
+
+      {selectedTheme === "notebook" && (
+        <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'200\' height=\'200\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noise\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'4\' /%3E%3C/filter%3E%3Crect width=\'200\' height=\'200\' filter=\'url(%23noise)\' /%3E%3C/svg%3E")'}}/>
+      )}
+
+      <div className={`w-full max-w-md relative z-10 ${selectedTheme === "default" ? "animate-slide-up" : ""}`}>
+        <h1 className={`mb-6 text-center text-3xl font-bold relative ${selectedTheme === "notebook" ? "font-permanent-marker text-[#1e40af] transform -rotate-1" : "text-white tracking-tight"}`}>
+          {selectedTheme === "notebook" && (
+            <span className="absolute -inset-2 bg-yellow-200/40 -z-10 transform rotate-1 rounded"></span>
+          )}
+          Edit Profile
+        </h1>
 
         <div className="flex flex-col gap-4">
           <input
@@ -6297,14 +6986,18 @@ if (screen === "editProfile") {
                 onChange={(e) =>
                   setStudentProfile({ ...studentProfile, year: e.target.value })
                 }
-                className="w-full rounded-xl border border-white px-4 py-3 text-sm appearance-none bg-transparent text-white cursor-pointer"
+                className={`w-full rounded-xl px-4 py-3 text-sm appearance-none bg-transparent cursor-pointer ${
+                  selectedTheme === "notebook"
+                    ? "border-2 border-[#1e40af] text-[#1e40af]"
+                    : "border border-white text-white"
+                }`}
               >
-                <option value="" disabled className="bg-black text-white">Year</option>
-                <option value="1" className="bg-black text-white">1</option>
-                <option value="2" className="bg-black text-white">2</option>
-                <option value="3" className="bg-black text-white">3</option>
-                <option value="4" className="bg-black text-white">4</option>
-                <option value="Other" className="bg-black text-white">Other</option>
+                <option value="" disabled className={selectedTheme === "notebook" ? "bg-[#f5f1e8] text-[#1e40af]" : "bg-black text-white"}>Year</option>
+                <option value="1" className={selectedTheme === "notebook" ? "bg-[#f5f1e8] text-[#1e40af]" : "bg-black text-white"}>1</option>
+                <option value="2" className={selectedTheme === "notebook" ? "bg-[#f5f1e8] text-[#1e40af]" : "bg-black text-white"}>2</option>
+                <option value="3" className={selectedTheme === "notebook" ? "bg-[#f5f1e8] text-[#1e40af]" : "bg-black text-white"}>3</option>
+                <option value="4" className={selectedTheme === "notebook" ? "bg-[#f5f1e8] text-[#1e40af]" : "bg-black text-white"}>4</option>
+                <option value="Other" className={selectedTheme === "notebook" ? "bg-[#f5f1e8] text-[#1e40af]" : "bg-black text-white"}>Other</option>
               </select>
 
               <input
@@ -6379,20 +7072,70 @@ if (screen === "editProfile") {
 
 if (screen === "about") {
   return (
-    <main className="relative flex min-h-screen items-center justify-center bg-black px-6 py-12">
-      <div className="w-full max-w-2xl">
+    <main className={`relative flex min-h-screen items-center justify-center px-6 py-12 overflow-hidden ${
+      selectedTheme === "notebook"
+        ? "bg-[#f5f1e8]"
+        : "bg-gradient-to-br from-gray-900 via-black to-gray-900"
+    }`} style={selectedTheme === "notebook" ? {
+      backgroundImage: `
+        repeating-linear-gradient(0deg, transparent, transparent 31px, rgba(0,0,0,0.08) 31px, rgba(0,0,0,0.08) 33px),
+        linear-gradient(90deg, rgba(255,100,100,0.15) 0px, transparent 2px),
+        linear-gradient(90deg, rgba(100,100,255,0.15) 60px, transparent 2px)
+      `,
+      backgroundSize: '100% 33px, 100% 100%, 100% 100%'
+    } : {}}>
+
+      {selectedTheme === "default" && (
+        <>
+          <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 via-purple-500/5 to-pink-500/5 animate-gradient-shift"></div>
+          <div className="absolute inset-0 opacity-[0.02]" style={{
+            backgroundImage: 'radial-gradient(circle at 1px 1px, white 1px, transparent 0)',
+            backgroundSize: '40px 40px'
+          }}></div>
+        </>
+      )}
+
+      {selectedTheme === "notebook" && (
+        <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{
+          backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'200\' height=\'200\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noise\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'4\' /%3E%3C/filter%3E%3Crect width=\'200\' height=\'200\' filter=\'url(%23noise)\' /%3E%3C/svg%3E")',
+        }} />
+      )}
+
+      <div className={`w-full max-w-2xl relative z-10 ${selectedTheme === "default" ? "animate-slide-up" : ""}`}>
         <div className="mb-8 flex items-center justify-between">
-          <h1 className="text-3xl font-bold text-white">About</h1>
+          <h1 className={`font-bold ${
+            selectedTheme === "notebook"
+              ? "text-4xl font-permanent-marker text-[#1e40af] transform -rotate-1 relative"
+              : "text-3xl text-white tracking-tight"
+          }`}>
+            {selectedTheme === "notebook" && (
+              <span className="absolute -bottom-2 left-0 w-24 h-3 bg-yellow-200 opacity-40 -rotate-1 -z-10"></span>
+            )}
+            About
+          </h1>
           <button
             type="button"
             onClick={() => setScreen("role")}
-            className="rounded-xl border border-white text-white px-4 py-2 text-sm font-semibold transition-colors hover:bg-gray-50 hover:text-black"
+            className={`px-4 py-2 text-sm font-semibold transition-all duration-300 ${
+              selectedTheme === "notebook"
+                ? "font-caveat text-lg text-gray-700 hover:text-[#dc2626]"
+                : "rounded-xl border border-white/20 text-white hover:bg-white hover:text-black hover:scale-[1.02]"
+            }`}
+            style={selectedTheme === "notebook" ? {
+              border: '2px solid #6b7280',
+              borderRadius: '8px 12px 10px 14px',
+              background: 'rgba(229, 229, 229, 0.3)'
+            } : {}}
           >
             Back
           </button>
         </div>
 
-        <div className="space-y-6 text-white/90 leading-relaxed">
+        <div className={`space-y-6 leading-relaxed ${
+          selectedTheme === "notebook"
+            ? "text-gray-800 font-caveat text-lg"
+            : "text-white/90"
+        }`}>
           <p>
             Hi!
             <br />
@@ -6626,6 +7369,7 @@ const displayedHistoryBoard = viewingSnapshot
     setGamePin(null);
     setJoinMode(false);
     setJoinPinInput("");
+    setAiEnabled(false);
     setOtherStudents([]);
     setOtherProfessionals([]);
     setScreen("role");
@@ -6692,11 +7436,31 @@ const displayedHistoryBoard = viewingSnapshot
     setGamePin(null);
     setJoinMode(false);
     setJoinPinInput("");
+    setAiEnabled(false);
     setScreen(seatedRole === "professional" ? "professionalDashboard" : "dashboard");
   }}
 />
 
-      <main className="relative flex items-center justify-center bg-black px-6 py-1 overflow-y-auto" style={{ minHeight: '100vh' }}>
+      <main
+        className={`relative flex items-center justify-center px-6 py-1 overflow-y-auto ${selectedTheme === "notebook" ? "bg-[#f5f1e8]" : "bg-gradient-to-br from-gray-900 via-black to-gray-900"}`}
+        style={selectedTheme === "notebook" ? {
+          minHeight: '100vh',
+          backgroundImage: `repeating-linear-gradient(0deg, transparent, transparent 31px, rgba(0,0,0,0.08) 31px, rgba(0,0,0,0.08) 33px), linear-gradient(90deg, rgba(255,100,100,0.15) 0px, transparent 2px), linear-gradient(90deg, rgba(100,100,255,0.15) 60px, transparent 2px)`,
+          backgroundSize: '100% 33px, 100% 100%, 100% 100%'
+        } : { minHeight: '100vh' }}
+      >
+
+      {selectedTheme === "default" && (
+        <>
+          <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 via-purple-500/5 to-pink-500/5 animate-gradient-shift"></div>
+          <div className="absolute inset-0 opacity-[0.02]" style={{backgroundImage: 'radial-gradient(circle at 1px 1px, white 1px, transparent 0)', backgroundSize: '40px 40px'}}></div>
+        </>
+      )}
+
+      {selectedTheme === "notebook" && (
+        <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'200\' height=\'200\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noise\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'4\' /%3E%3C/filter%3E%3Crect width=\'200\' height=\'200\' filter=\'url(%23noise)\' /%3E%3C/svg%3E")'}}/>
+      )}
+
      {/* Play Again UI - only show in multiplayer when game is over and opponent hasn't quit */}
       {multiplayerActive && mpState?.gameOver && !opponentQuit && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50">
@@ -6905,19 +7669,20 @@ onClick={() => {
     setMultiplayerActive(false);
     setOpponentQuit(false);
     setOpponentName(null);
-    
+
     sessionStorage.removeItem('headsup_gameId');
     sessionStorage.removeItem('headsup_mySeat');
     sessionStorage.removeItem('headsup_gamePin');
     sessionStorage.removeItem('headsup_dealerOffset');
     sessionStorage.removeItem('headsup_hostState');
     sessionStorage.removeItem('headsup_handHistory');
-    
+
     clearTimers();
     clearPin();
     setGamePin(null);
     setJoinMode(false);
     setJoinPinInput("");
+    setAiEnabled(false);
     setScreen(seatedRole === "professional" ? "professionalDashboard" : "dashboard");
   } else {
     setShowDashboardConfirm(true);
@@ -6945,7 +7710,7 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
         setMultiplayerActive(false);
         setOpponentQuit(false);
         setOpponentName(null);
-        
+
         // Clear saved session so we don't reconnect
         sessionStorage.removeItem('headsup_gameId');
         sessionStorage.removeItem('headsup_mySeat');
@@ -6954,12 +7719,13 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
         sessionStorage.removeItem('headsup_hostState');
         sessionStorage.removeItem('headsup_joinerState');
         sessionStorage.removeItem('headsup_handHistory');
-        
+
         clearTimers();
         clearPin();
         setGamePin(null);
         setJoinMode(false);
         setJoinPinInput("");
+        setAiEnabled(false);
         setOtherStudents([]);
         setOtherProfessionals([]);
         setScreen("role");
@@ -7239,13 +8005,21 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
                           ))
                       ) ? (
   <>
-    <CardTile card={oppA} />
-    <CardTile card={oppB} />
+    <div className={`${dealtCards[amIDealer ? 'bbCard1' : 'sbCard1'] ? 'animate-deal-to-top' : 'opacity-0'} ${flippedCards.oppCard1 ? 'animate-flip-card' : ''}`}>
+      <CardTile card={oppA} />
+    </div>
+    <div className={`${dealtCards[amIDealer ? 'bbCard2' : 'sbCard2'] ? 'animate-deal-to-top' : 'opacity-0'} ${flippedCards.oppCard2 ? 'animate-flip-card' : ''}`}>
+      <CardTile card={oppB} />
+    </div>
   </>
 ) : (
   <>
-    <CardBack />
-    <CardBack />
+    <div className={dealtCards[amIDealer ? 'bbCard1' : 'sbCard1'] ? 'animate-deal-to-top' : 'opacity-0'}>
+      <CardBack />
+    </div>
+    <div className={dealtCards[amIDealer ? 'bbCard2' : 'sbCard2'] ? 'animate-deal-to-top' : 'opacity-0'}>
+      <CardBack />
+    </div>
   </>
 )
 
@@ -7257,9 +8031,16 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
               {/* BOARD (always current hand) */}
 <div className="relative flex h-40 items-center justify-center">
   <div className="absolute flex gap-3 min-[1536px]:max-[1650px]:gap-2 top-[8px] min-[1536px]:max-[1650px]:top-[7px]">
-    {board.slice(0, displayStreet).map((c, i) => (
-      <CardTile key={i} card={c} />
-    ))}
+    {board.slice(0, displayStreet).map((c, i) => {
+      // Determine which animation to apply based on card index
+      const cardKey = i === 0 ? 'flop1' : i === 1 ? 'flop2' : i === 2 ? 'flop3' : i === 3 ? 'turn' : 'river';
+      const shouldAnimate = dealtCards[cardKey];
+      return (
+        <div key={i} className={shouldAnimate ? 'animate-deal-to-board' : 'opacity-0'}>
+          <CardTile card={c} />
+        </div>
+      );
+    })}
   </div>
 </div>
 
@@ -7291,13 +8072,21 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
                       : false  // Always show your own cards on your screen
                     ) ? (
                      <>
-                      <CardBack />
-                      <CardBack />
+                      <div className={dealtCards[amIDealer ? 'sbCard1' : 'bbCard1'] ? 'animate-deal-to-bottom' : 'opacity-0'}>
+                        <CardBack />
+                      </div>
+                      <div className={dealtCards[amIDealer ? 'sbCard2' : 'bbCard2'] ? 'animate-deal-to-bottom' : 'opacity-0'}>
+                        <CardBack />
+                      </div>
                     </>
                   ) : (
                     <>
-                      <CardTile card={youC} />
-                      <CardTile card={youD} />
+                      <div className={`${dealtCards[amIDealer ? 'sbCard1' : 'bbCard1'] ? 'animate-deal-to-bottom' : 'opacity-0'} ${flippedCards.myCard1 ? 'animate-flip-card' : ''}`}>
+                        <CardTile card={youC} />
+                      </div>
+                      <div className={`${dealtCards[amIDealer ? 'sbCard2' : 'bbCard2'] ? 'animate-deal-to-bottom' : 'opacity-0'} ${flippedCards.myCard2 ? 'animate-flip-card' : ''}`}>
+                        <CardTile card={youD} />
+                      </div>
                     </>
                   )
                 ) : null}
@@ -7387,7 +8176,7 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
     }
   }}
   disabled={!(displayToAct === mySeat && displayHandResult.status === "playing")}
-  className="h-[64px] w-[100px] min-[1536px]:max-[1650px]:h-[50px] min-[1536px]:max-[1650px]:w-[78px] rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border bg-white px-4 py-3 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-2 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+  className="h-[64px] w-[100px] min-[1536px]:max-[1650px]:h-[50px] min-[1536px]:max-[1650px]:w-[78px] rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border bg-white px-4 py-3 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-2 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm transition-all duration-300 hover:bg-gray-100 hover:scale-[1.02] hover:shadow-[0_10px_30px_rgba(0,0,0,0.1)] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
 >
   Fold
 </button>
@@ -7398,7 +8187,7 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
   dispatchAction(facingBetBottom ? { type: "CALL" } : { type: "CHECK" })
 }
   disabled={!(displayToAct === mySeat && displayHandResult.status === "playing")}
-  className="flex h-[64px] w-[100px] min-[1536px]:max-[1650px]:h-[50px] min-[1536px]:max-[1650px]:w-[78px] flex-col items-center justify-center rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border bg-white px-4 py-3 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-2 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+  className="flex h-[64px] w-[100px] min-[1536px]:max-[1650px]:h-[50px] min-[1536px]:max-[1650px]:w-[78px] flex-col items-center justify-center rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border bg-white px-4 py-3 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-2 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm transition-all duration-300 hover:bg-gray-100 hover:scale-[1.02] hover:shadow-[0_10px_30px_rgba(0,0,0,0.1)] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
 >
   <div>{facingBetBottom ? "Call" : "Check"}</div>
 
@@ -7417,7 +8206,7 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
     dispatchAction({ type: "BET_RAISE_TO", to: finalSize });
   }}
   disabled={!(displayToAct === mySeat && displayHandResult.status === "playing")}
-  className="flex h-[64px] w-[100px] min-[1536px]:max-[1650px]:h-[50px] min-[1536px]:max-[1650px]:w-[78px] flex-col items-center justify-center rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border bg-white px-4 py-3 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-2 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+  className="flex h-[64px] w-[100px] min-[1536px]:max-[1650px]:h-[50px] min-[1536px]:max-[1650px]:w-[78px] flex-col items-center justify-center rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border bg-white px-4 py-3 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-2 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm transition-all duration-300 hover:bg-gray-100 hover:scale-[1.02] hover:shadow-[0_10px_30px_rgba(0,0,0,0.1)] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
 >
   <div className="text-sm min-[1536px]:max-[1650px]:text-xs leading-tight">
     {facingBetBottom ? "Raise" : "Bet"}

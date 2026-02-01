@@ -24,3 +24,127 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Handwritten font utilities for notebook theme */
+.font-caveat {
+  font-family: var(--font-caveat), cursive;
+}
+
+.font-permanent-marker {
+  font-family: var(--font-permanent-marker), cursive;
+}
+
+/* Professional default theme animations */
+@keyframes gradient-shift {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-gradient-shift {
+  animation: gradient-shift 8s ease-in-out infinite;
+}
+
+.animate-fade-in {
+  animation: fade-in 0.45s ease-out;
+}
+
+.animate-slide-up {
+  animation: slide-up 0.45s ease-out;
+  animation-fill-mode: both;
+}
+
+.animate-slide-up-delay-1 {
+  animation: slide-up 0.45s ease-out 0.15s;
+  animation-fill-mode: both;
+}
+
+.animate-slide-up-delay-2 {
+  animation: slide-up 0.45s ease-out 0.2s;
+  animation-fill-mode: both;
+}
+
+/* Card dealing animations */
+@keyframes deal-to-top {
+  from {
+    opacity: 0;
+    transform: translate(0, 200px) scale(0.5);
+  }
+  to {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+}
+
+@keyframes deal-to-bottom {
+  from {
+    opacity: 0;
+    transform: translate(0, -200px) scale(0.5);
+  }
+  to {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+}
+
+@keyframes deal-to-board {
+  from {
+    opacity: 0;
+    transform: translateY(-150px) scale(0.5) rotate(-10deg);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1) rotate(0deg);
+  }
+}
+
+@keyframes flip-card {
+  from {
+    transform: rotateY(0deg);
+  }
+  to {
+    transform: rotateY(360deg);
+  }
+}
+
+.animate-deal-to-top {
+  animation: deal-to-top 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  animation-fill-mode: forwards;
+}
+
+.animate-deal-to-bottom {
+  animation: deal-to-bottom 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  animation-fill-mode: forwards;
+}
+
+.animate-deal-to-board {
+  animation: deal-to-board 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  animation-fill-mode: forwards;
+}
+
+.animate-flip-card {
+  animation: flip-card 0.5s ease-in-out;
+}
