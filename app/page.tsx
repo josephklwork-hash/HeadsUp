@@ -8,6 +8,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { MultiplayerHost } from "./multiplayerHost";
 import { MultiplayerJoiner } from "./multiplayerJoiner";
 import type { HostState, GameAction } from "./multiplayerHost";
+import DailyVideoCall from './components/DailyVideoCall';
 
 export const dynamic = 'force-dynamic';  // ← THIS LINE
 
@@ -23,6 +24,7 @@ type Screen =
   | "professionalDashboard"
   | "editProfile"
   | "connections"
+  | "about"
   | "game";
 
 type Seat = "top" | "bottom";
@@ -1186,6 +1188,12 @@ const FOUNDER_ID = 'cec95997-2f5d-4836-8fc0-c4978d0ca231';
   const [isReconnecting, setIsReconnecting] = useState(true);
   const [savedHostState, setSavedHostState] = useState<HostState | null>(null);
 
+  // Video call state
+  const [dailyRoomUrl, setDailyRoomUrl] = useState<string | null>(null);
+  const [isCreatingRoom, setIsCreatingRoom] = useState(false);
+  const [videoCallActive, setVideoCallActive] = useState(false);
+  const [roomCreationError, setRoomCreationError] = useState<string | null>(null);
+
   // Store the multiplayer controllers
 const [mpHost, setMpHost] = useState<MultiplayerHost | null>(null);
 const [mpJoiner, setMpJoiner] = useState<MultiplayerJoiner | null>(null);
@@ -1480,6 +1488,43 @@ async function rejectConnection(odId: string, connectionId: string, userName: st
   }
 }
 
+// Video call room creation function
+const createDailyRoom = async () => {
+  if (!gameId) return;
+
+  setIsCreatingRoom(true);
+  setRoomCreationError(null);
+
+  try {
+    const { data, error } = await supabase.functions.invoke('create-daily-room', {
+      body: { gameId }
+    });
+
+    if (error) throw error;
+
+    const roomUrl = data.url;
+    setDailyRoomUrl(roomUrl);
+
+    // Broadcast room URL to joiner
+    if (mpChannelRef.current) {
+      mpChannelRef.current.send({
+        type: 'broadcast',
+        event: 'mp',
+        payload: {
+          event: 'VIDEO_ROOM_CREATED',
+          roomUrl: roomUrl,
+          sender: sbUser?.id ?? 'host',
+        },
+      });
+    }
+  } catch (err) {
+    console.error('Failed to create video room:', err);
+    setRoomCreationError('Failed to start video call');
+  } finally {
+    setIsCreatingRoom(false);
+  }
+};
+
 const [savingProfile, setSavingProfile] = useState(false);
 
   // timers
@@ -1604,7 +1649,17 @@ useEffect(() => {
         setMpState(JSON.parse(JSON.stringify(mpHostRef.current.getState())));
       }
     }
-    
+
+    // Video room events
+    if (payload.event === "VIDEO_ROOM_CREATED" && payload.roomUrl) {
+      setDailyRoomUrl(payload.roomUrl);
+    }
+
+    if (payload.event === "VIDEO_CALL_ENDED") {
+      setDailyRoomUrl(null);
+      setVideoCallActive(false);
+    }
+
     // HOST: Handle joiner's requests for state
     if (isHost && payload.event === "SYNC" && payload.kind === "REQUEST_SNAPSHOT") {
       if (mpHostRef.current) {
@@ -1773,6 +1828,10 @@ useEffect(() => {
       setMpJoiner(null);
       mpJoinerRef.current = null;
     }
+    // Video cleanup
+    setDailyRoomUrl(null);
+    setVideoCallActive(false);
+    setRoomCreationError(null);
     supabase.removeChannel(ch);
   };
 }, [gameId, multiplayerActive, isHost, sbUser?.id]);
@@ -4462,6 +4521,17 @@ const joinGame = () => {
       >
         Explore
       </button>
+
+      <button
+        type="button"
+        onClick={() => {
+          clearTimers();
+          navigateTo("about");
+        }}
+        className="text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-white underline opacity-80 hover:opacity-100"
+      >
+        About
+      </button>
     </>
   ) : null
 )}
@@ -4469,9 +4539,12 @@ const joinGame = () => {
 </div>
 
       <div className="w-full max-w-xl min-[1536px]:max-[1650px]:max-w-[450px] flex flex-col">
-        <h1 className="h-[44px] min-[1536px]:max-[1650px]:h-[34px] mb-8 min-[1536px]:max-[1650px]:mb-6 text-center text-3xl min-[1536px]:max-[1650px]:text-2xl font-bold leading-[44px] min-[1536px]:max-[1650px]:leading-[34px] text-white">
+        <h1 className="mb-3 min-[1536px]:max-[1650px]:mb-2 text-center text-3xl min-[1536px]:max-[1650px]:text-2xl font-bold text-white">
           HeadsUp
         </h1>
+        <p className="mb-8 min-[1536px]:max-[1650px]:mb-6 text-center text-sm min-[1536px]:max-[1650px]:text-xs text-white/70">
+          Making coffee chats more memorable and engaging through structured interaction.
+        </p>
 
       <div className="h-[220px] min-[1536px]:max-[1650px]:h-[180px] flex flex-col justify-start">
 
@@ -5061,7 +5134,7 @@ if (screen === "dashboard" && (seatedRole === "student" || isGuestBrowsing)) {
       <div className="relative w-full max-w-md rounded-3xl border border-gray-300 bg-white p-6 shadow-lg">
         <h3 className="mb-2 text-xl font-bold text-gray-900">Hey! 👋</h3>
         <p className="mb-4 text-sm text-gray-700">
-          I'm Joseph, the founder of HeadsUp. Thanks for exploring the community!
+          I'm Joseph. Thanks for checking this out!
         </p>
         <p className="mb-6 text-sm text-gray-700">
           I'd love to connect with you personally. Drop your name and email below, and I'll reach out soon.
@@ -6286,6 +6359,81 @@ if (screen === "editProfile") {
   );
 }
 
+/* ---------- about screen ---------- */
+
+if (screen === "about") {
+  return (
+    <main className="relative flex min-h-screen items-center justify-center bg-black px-6 py-12">
+      <div className="w-full max-w-2xl">
+        <div className="mb-8 flex items-center justify-between">
+          <h1 className="text-3xl font-bold text-white">About</h1>
+          <button
+            type="button"
+            onClick={() => setScreen("role")}
+            className="rounded-xl border border-white text-white px-4 py-2 text-sm font-semibold transition-colors hover:bg-gray-50 hover:text-black"
+          >
+            Back
+          </button>
+        </div>
+
+        <div className="space-y-6 text-white/90 leading-relaxed">
+          <p>
+            Hi!
+            <br />
+            <br />
+            I'm a third year Economics student at UCLA interested in business, risk, and decision making.
+          </p>
+
+          <p>
+            I built HeadsUp as a different way to approach networking. When I reach out to someone, I offer to play a quick poker game (no stakes) while having a coffee chat. The game gives structure to the conversation and makes the interaction more memorable and engaging.
+          </p>
+
+          <p>
+            This project has been a way to learn product thinking. How do you design for behavior? What makes people actually use something? How do you go from idea to working product?
+          </p>
+
+          <p>
+            I'm using it for my own outreach now. The experience has been great! Some people love the format, others prefer a traditional call. Either way, I learn something from each conversation.
+          </p>
+
+          <p>
+            This isn't a startup. It's a portfolio project while I explore roles in product management, risk management, and FP&A. I'm proud of what I've built and always working to make it better.
+          </p>
+
+          <div className="mt-8 pt-6 border-t border-white/20">
+            <p className="font-semibold text-white mb-2">Joseph Kim-Lee</p>
+            <p className="text-sm text-white/70 mb-1">UCLA Economics '27</p>
+            <div className="flex flex-col gap-1 text-sm">
+              <a
+                href="mailto:josephklwork@gmail.com"
+                className="text-white/80 hover:text-white underline"
+              >
+                josephklwork@gmail.com
+              </a>
+              <a
+                href="https://linkedin.com/in/joseph-kim-lee"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-white/80 hover:text-white underline"
+              >
+                linkedin.com/in/joseph-kim-lee
+              </a>
+              <a
+                href="https://github.com/josephklwork-hash"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-white/80 hover:text-white underline"
+              >
+                github.com/josephklwork-hash
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  );
+}
+
   /* ---------- game view ---------- */
 
   if (screen !== "game" || !seatedRole) return null;
@@ -6412,7 +6560,7 @@ const displayedHistoryBoard = viewingSnapshot
   onConfirm={() => {
     setShowTitleScreenConfirm(false);
     setOpponentName(null);
-    
+
     // Cleanup multiplayer and broadcast quit - use refs for reliability
     if (mpHostRef.current) {
       mpHostRef.current.destroy();
@@ -6424,6 +6572,10 @@ const displayedHistoryBoard = viewingSnapshot
       setMpJoiner(null);
       mpJoinerRef.current = null;
     }
+    // Video cleanup
+    setDailyRoomUrl(null);
+    setVideoCallActive(false);
+    setRoomCreationError(null);
     
     // Also broadcast quit directly via channel if game exists but controllers don't
     if (gameId && !mpHostRef.current && !mpJoinerRef.current) {
@@ -6474,7 +6626,7 @@ const displayedHistoryBoard = viewingSnapshot
   onConfirm={() => {
     setShowDashboardConfirm(false);
     setOpponentName(null);
-    
+
     // Cleanup multiplayer and broadcast quit - use refs for reliability
     if (mpHostRef.current) {
       mpHostRef.current.destroy();
@@ -6486,6 +6638,10 @@ const displayedHistoryBoard = viewingSnapshot
       setMpJoiner(null);
       mpJoinerRef.current = null;
     }
+    // Video cleanup
+    setDailyRoomUrl(null);
+    setVideoCallActive(false);
+    setRoomCreationError(null);
     
     // Also broadcast quit directly via channel if game exists but controllers don't
     if (gameId && !mpHostRef.current && !mpJoinerRef.current) {
@@ -6801,6 +6957,30 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
     Title screen
   </button>
 
+{/* Video Call Toggle - Only show in multiplayer */}
+{multiplayerActive && !dailyRoomUrl && !opponentQuit && (
+  <button
+    type="button"
+    onClick={createDailyRoom}
+    disabled={isCreatingRoom}
+    className="text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-white underline opacity-80 hover:opacity-100 disabled:opacity-50"
+  >
+    {isCreatingRoom ? 'Starting video...' : 'Start Video Call'}
+  </button>
+)}
+
+{multiplayerActive && videoCallActive && (
+  <span className="text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-white opacity-80">
+    Video active
+  </span>
+)}
+
+{roomCreationError && (
+  <span className="text-sm min-[1536px]:max-[1650px]:text-xs text-red-400 opacity-90">
+    {roomCreationError}
+  </span>
+)}
+
 {opponentQuit && (
 <div className="text-sm min-[1536px]:max-[1650px]:text-xs text-white opacity-90">
       Opponent Quit, Go To Title Screen
@@ -6809,6 +6989,33 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
 
 </div>
           </div>
+
+          {/* Video Call - Fixed top-right corner */}
+          {multiplayerActive && dailyRoomUrl && (
+            <div className="fixed top-20 right-6 z-40">
+              <DailyVideoCall
+                roomUrl={dailyRoomUrl}
+                onJoinedCall={() => setVideoCallActive(true)}
+                onLeftCall={() => {
+                  setVideoCallActive(false);
+                  if (mpChannelRef.current) {
+                    mpChannelRef.current.send({
+                      type: 'broadcast',
+                      event: 'mp',
+                      payload: {
+                        event: 'VIDEO_CALL_ENDED',
+                        sender: sbUser?.id ?? (mySeat === "bottom" ? 'host' : 'joiner'),
+                      },
+                    });
+                  }
+                }}
+                onError={(err) => {
+                  console.error('Daily video error:', err);
+                  setRoomCreationError('Video connection failed');
+                }}
+              />
+            </div>
+          )}
 
           {/* ACTION LOG pinned left + TABLE centered */}
           <div className="relative mt-6 w-full">
