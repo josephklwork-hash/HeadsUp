@@ -236,17 +236,15 @@ export default function DailyVideoCall({
         pointerEvents: 'none'
       }}
     >
-      {/* Drag handle bar */}
+      {/* Drag handle - centered dots only */}
       <div
         onMouseDown={handleDragStart}
-        className="absolute top-0 left-0 right-0 h-8 bg-gradient-to-b from-black/70 to-transparent cursor-grab active:cursor-grabbing z-30 flex items-center justify-center rounded-t-xl"
+        className="absolute top-2 left-1/2 -translate-x-1/2 px-3 py-1.5 bg-black/70 rounded-full cursor-grab active:cursor-grabbing z-30 flex items-center justify-center gap-1"
         style={{ pointerEvents: 'auto' }}
       >
-        <div className="flex gap-1">
-          <div className="w-1.5 h-1.5 rounded-full bg-white/50"></div>
-          <div className="w-1.5 h-1.5 rounded-full bg-white/50"></div>
-          <div className="w-1.5 h-1.5 rounded-full bg-white/50"></div>
-        </div>
+        <div className="w-1.5 h-1.5 rounded-full bg-white/50"></div>
+        <div className="w-1.5 h-1.5 rounded-full bg-white/50"></div>
+        <div className="w-1.5 h-1.5 rounded-full bg-white/50"></div>
       </div>
 
       <div
