@@ -19,13 +19,37 @@ export default function DailyVideoCall({
   const callContainerRef = useRef<HTMLDivElement>(null);
   const callObjectRef = useRef<any>(null);
   const isJoiningRef = useRef(false);
-  const [dimensions, setDimensions] = useState({ width: 640, height: 480 });
-  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const isInitializedRef = useRef(false);
+
+  // Initialize with viewport-relative values for responsiveness
+  const getInitialDimensions = () => ({
+    width: Math.max(200, Math.min(320, window.innerWidth * 0.17)),
+    height: Math.max(150, Math.min(240, window.innerHeight * 0.22))
+  });
+
+  const getInitialPosition = () => ({
+    // Position at ~72% from left edge (matching original 1390/1920)
+    x: Math.max(20, window.innerWidth * 0.72),
+    // Position at ~28% from top edge (matching original 300/1080)
+    y: Math.max(80, window.innerHeight * 0.28)
+  });
+
+  const [dimensions, setDimensions] = useState({ width: 320, height: 240 });
+  const [position, setPosition] = useState({ x: 1390, y: 300 });
   const [isResizing, setIsResizing] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [resizeCorner, setResizeCorner] = useState<'tl' | 'tr' | 'bl' | 'br' | null>(null);
   const resizeStartRef = useRef({ x: 0, y: 0, width: 0, height: 0, posX: 0, posY: 0 });
   const dragStartRef = useRef({ x: 0, y: 0, posX: 0, posY: 0 });
+
+  // Set responsive initial position on mount
+  useEffect(() => {
+    if (!isInitializedRef.current && typeof window !== 'undefined') {
+      setDimensions(getInitialDimensions());
+      setPosition(getInitialPosition());
+      isInitializedRef.current = true;
+    }
+  }, []);
 
   useEffect(() => {
     if (!roomUrl || !callContainerRef.current || isJoiningRef.current) return;
@@ -197,11 +221,12 @@ export default function DailyVideoCall({
 
   return (
     <div
-      className="absolute"
+      className="fixed"
       style={{
         width: dimensions.width,
         height: dimensions.height,
-        transform: `translate(${position.x}px, ${position.y}px)`,
+        left: position.x,
+        top: position.y,
         cursor: isDragging ? 'grabbing' : 'auto'
       }}
     >

@@ -4654,6 +4654,30 @@ const joinGame = () => {
 >
   Join Game
 </button>
+
+      <button
+  onClick={() => {
+    clearTimers();
+    setJoinMode(false);
+    setGamePin(null);
+    setMultiplayerActive(true);
+    setGameId('test-game-' + Date.now());
+    setMySeat('bottom');
+    setSeatedRole('student');
+    setBetSize(2);
+    setScreen("game");
+  }}
+  className={`
+    ${baseButton}
+    py-4
+    min-[1536px]:max-[1650px]:py-3
+    text-sm
+    min-[1536px]:max-[1650px]:text-xs
+    opacity-60
+  `}
+>
+  Go to Game (Test)
+</button>
     </div>
   )}
 </div>
@@ -7015,31 +7039,27 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
 
           {/* Video Call - Draggable window */}
           {multiplayerActive && dailyRoomUrl && (
-            <div className="fixed inset-0 pointer-events-none z-40">
-              <div className="pointer-events-auto absolute top-20 right-6">
-                <DailyVideoCall
-                roomUrl={dailyRoomUrl}
-                onJoinedCall={() => setVideoCallActive(true)}
-                onLeftCall={() => {
-                  setVideoCallActive(false);
-                  if (mpChannelRef.current) {
-                    mpChannelRef.current.send({
-                      type: 'broadcast',
-                      event: 'mp',
-                      payload: {
-                        event: 'VIDEO_CALL_ENDED',
-                        sender: sbUser?.id ?? (mySeat === "bottom" ? 'host' : 'joiner'),
-                      },
-                    });
-                  }
-                }}
-                onError={(err) => {
-                  console.error('Daily video error:', err);
-                  setRoomCreationError('Video connection failed');
-                }}
-              />
-              </div>
-            </div>
+            <DailyVideoCall
+              roomUrl={dailyRoomUrl}
+              onJoinedCall={() => setVideoCallActive(true)}
+              onLeftCall={() => {
+                setVideoCallActive(false);
+                if (mpChannelRef.current) {
+                  mpChannelRef.current.send({
+                    type: 'broadcast',
+                    event: 'mp',
+                    payload: {
+                      event: 'VIDEO_CALL_ENDED',
+                      sender: sbUser?.id ?? (mySeat === "bottom" ? 'host' : 'joiner'),
+                    },
+                  });
+                }
+              }}
+              onError={(err) => {
+                console.error('Daily video error:', err);
+                setRoomCreationError('Video connection failed');
+              }}
+            />
           )}
 
           {/* ACTION LOG pinned left + TABLE centered */}
