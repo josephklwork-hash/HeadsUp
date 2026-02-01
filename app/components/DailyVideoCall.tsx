@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import DailyIframe from '@daily-co/daily-js';
 
 interface DailyVideoCallProps {
@@ -19,6 +19,9 @@ export default function DailyVideoCall({
   const callContainerRef = useRef<HTMLDivElement>(null);
   const callObjectRef = useRef<any>(null);
   const isJoiningRef = useRef(false);
+  const [dimensions, setDimensions] = useState({ width: 320, height: 240 });
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeStartRef = useRef({ x: 0, y: 0, width: 0, height: 0 });
 
   useEffect(() => {
     if (!roomUrl || !callContainerRef.current || isJoiningRef.current) return;
@@ -83,10 +86,57 @@ export default function DailyVideoCall({
     };
   }, [roomUrl]);
 
+  const handleResizeStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+    resizeStartRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      width: dimensions.width,
+      height: dimensions.height
+    };
+  };
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const deltaX = e.clientX - resizeStartRef.current.x;
+      const deltaY = e.clientY - resizeStartRef.current.y;
+
+      const newWidth = Math.max(200, resizeStartRef.current.width + deltaX);
+      const newHeight = Math.max(150, resizeStartRef.current.height + deltaY);
+
+      setDimensions({ width: newWidth, height: newHeight });
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing]);
+
   return (
     <div
-      ref={callContainerRef}
-      className="w-[320px] h-[240px] rounded-xl border-2 border-white/20 overflow-hidden shadow-lg bg-black"
-    />
+      className="relative"
+      style={{ width: dimensions.width, height: dimensions.height }}
+    >
+      <div
+        ref={callContainerRef}
+        className="w-full h-full rounded-xl border-2 border-white/20 overflow-hidden shadow-lg bg-black"
+      />
+      <div
+        onMouseDown={handleResizeStart}
+        className="absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize bg-white/30 hover:bg-white/50 rounded-tl"
+        style={{ borderBottomRightRadius: '12px' }}
+      />
+    </div>
   );
 }
