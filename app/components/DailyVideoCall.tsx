@@ -23,16 +23,25 @@ export default function DailyVideoCall({
 
   // Initialize with viewport-relative values for responsiveness
   const getInitialDimensions = () => ({
-    width: Math.max(200, Math.min(320, window.innerWidth * 0.17)),
-    height: Math.max(150, Math.min(240, window.innerHeight * 0.22))
+    width: Math.max(200, Math.min(480, window.innerWidth * 0.25)),
+    height: Math.max(150, Math.min(360, window.innerHeight * 0.33))
   });
 
-  const getInitialPosition = () => ({
-    // Position at ~72% from left edge (matching original 1390/1920)
-    x: Math.max(20, window.innerWidth * 0.72),
-    // Position at ~28% from top edge (matching original 300/1080)
-    y: Math.max(80, window.innerHeight * 0.28)
-  });
+  const getInitialPosition = () => {
+    const videoWidth = Math.max(200, Math.min(480, window.innerWidth * 0.25));
+    // Center video on "Title screen" button position
+    // max-w-6xl is 1152px (72rem), centered on page
+    // Title screen button is on right side of this container
+    const maxContentWidth = 1152;
+    const containerRightEdge = (window.innerWidth + maxContentWidth) / 2;
+    // Title screen button is roughly 100-120px from right edge of container
+    const buttonCenterX = containerRightEdge - 100;
+    // Center video window on button
+    return {
+      x: Math.max(20, buttonCenterX - videoWidth / 2),
+      y: Math.max(80, window.innerHeight * 0.28)
+    };
+  };
 
   const [dimensions, setDimensions] = useState({ width: 320, height: 240 });
   const [position, setPosition] = useState({ x: 1390, y: 300 });
@@ -233,7 +242,7 @@ export default function DailyVideoCall({
       {/* Drag handle bar */}
       <div
         onMouseDown={handleDragStart}
-        className="absolute top-0 left-0 right-0 h-6 bg-gradient-to-b from-black/60 to-transparent rounded-t-xl cursor-grab active:cursor-grabbing z-10 flex items-center justify-center"
+        className="absolute top-0 left-8 right-8 h-6 bg-gradient-to-b from-black/60 to-transparent cursor-grab active:cursor-grabbing z-10 flex items-center justify-center"
       >
         <div className="flex gap-1">
           <div className="w-1 h-1 rounded-full bg-white/40"></div>
@@ -247,25 +256,25 @@ export default function DailyVideoCall({
         className="w-full h-full rounded-xl border-2 border-white/20 overflow-hidden shadow-lg bg-black"
       />
 
-      {/* Resize handles - all 4 corners */}
+      {/* Resize handles - all 4 corners (larger and higher z-index) */}
       <div
         onMouseDown={(e) => handleResizeStart(e, 'tl')}
-        className="absolute top-0 left-0 w-4 h-4 cursor-nwse-resize bg-white/30 hover:bg-white/50"
+        className="absolute top-0 left-0 w-8 h-8 cursor-nwse-resize bg-white/40 hover:bg-white/60 z-20 transition-colors"
         style={{ borderTopLeftRadius: '12px' }}
       />
       <div
         onMouseDown={(e) => handleResizeStart(e, 'tr')}
-        className="absolute top-0 right-0 w-4 h-4 cursor-nesw-resize bg-white/30 hover:bg-white/50"
+        className="absolute top-0 right-0 w-8 h-8 cursor-nesw-resize bg-white/40 hover:bg-white/60 z-20 transition-colors"
         style={{ borderTopRightRadius: '12px' }}
       />
       <div
         onMouseDown={(e) => handleResizeStart(e, 'bl')}
-        className="absolute bottom-0 left-0 w-4 h-4 cursor-nesw-resize bg-white/30 hover:bg-white/50"
+        className="absolute bottom-0 left-0 w-8 h-8 cursor-nesw-resize bg-white/40 hover:bg-white/60 z-20 transition-colors"
         style={{ borderBottomLeftRadius: '12px' }}
       />
       <div
         onMouseDown={(e) => handleResizeStart(e, 'br')}
-        className="absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize bg-white/30 hover:bg-white/50"
+        className="absolute bottom-0 right-0 w-8 h-8 cursor-nwse-resize bg-white/40 hover:bg-white/60 z-20 transition-colors"
         style={{ borderBottomRightRadius: '12px' }}
       />
     </div>
