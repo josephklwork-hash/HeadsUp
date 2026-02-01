@@ -7013,10 +7013,11 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
 </div>
           </div>
 
-          {/* Video Call - Fixed top-right corner */}
+          {/* Video Call - Draggable window */}
           {multiplayerActive && dailyRoomUrl && (
-            <div className="fixed top-20 right-6 z-40">
-              <DailyVideoCall
+            <div className="fixed inset-0 pointer-events-none z-40">
+              <div className="pointer-events-auto absolute top-20 right-6">
+                <DailyVideoCall
                 roomUrl={dailyRoomUrl}
                 onJoinedCall={() => setVideoCallActive(true)}
                 onLeftCall={() => {
@@ -7037,6 +7038,7 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
                   setRoomCreationError('Video connection failed');
                 }}
               />
+              </div>
             </div>
           )}
 
