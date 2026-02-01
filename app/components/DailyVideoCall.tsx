@@ -18,34 +18,70 @@ export default function DailyVideoCall({
 }: DailyVideoCallProps) {
   const callContainerRef = useRef<HTMLDivElement>(null);
   const callObjectRef = useRef<any>(null);
+  const isJoiningRef = useRef(false);
 
   useEffect(() => {
-    if (!roomUrl || !callContainerRef.current) return;
+    if (!roomUrl || !callContainerRef.current || isJoiningRef.current) return;
 
-    const callObject = DailyIframe.createFrame(callContainerRef.current, {
-      iframeStyle: {
-        width: '100%',
-        height: '100%',
-        border: '0',
-        borderRadius: '12px',
-      },
-      showLeaveButton: true,
-      showFullscreenButton: false,
-    });
+    const setupCall = async () => {
+      // Destroy any existing instance first and wait for cleanup
+      if (callObjectRef.current) {
+        try {
+          await callObjectRef.current.destroy();
+        } catch (e) {
+          console.error('Error destroying previous call instance:', e);
+        }
+        callObjectRef.current = null;
+      }
 
-    callObject
-      .join({ url: roomUrl })
-      .then(() => onJoinedCall?.())
-      .catch((err) => onError?.(err));
+      isJoiningRef.current = true;
 
-    callObject.on('left-meeting', () => onLeftCall?.());
+      try {
+        const callObject = DailyIframe.createFrame(callContainerRef.current!, {
+          iframeStyle: {
+            width: '100%',
+            height: '100%',
+            border: '0',
+            borderRadius: '12px',
+          },
+          showLeaveButton: true,
+          showFullscreenButton: false,
+        });
 
-    callObjectRef.current = callObject;
+        callObject.on('left-meeting', () => {
+          onLeftCall?.();
+          isJoiningRef.current = false;
+        });
+
+        callObjectRef.current = callObject;
+
+        await callObject.join({ url: roomUrl });
+        onJoinedCall?.();
+        isJoiningRef.current = false;
+      } catch (err: any) {
+        console.error('Error setting up call:', err);
+        onError?.(err);
+        isJoiningRef.current = false;
+      }
+    };
+
+    setupCall();
 
     return () => {
-      callObject?.destroy();
+      const cleanup = async () => {
+        if (callObjectRef.current) {
+          try {
+            await callObjectRef.current.destroy();
+          } catch (e) {
+            console.error('Error during cleanup:', e);
+          }
+          callObjectRef.current = null;
+        }
+        isJoiningRef.current = false;
+      };
+      cleanup();
     };
-  }, [roomUrl, onJoinedCall, onLeftCall, onError]);
+  }, [roomUrl]);
 
   return (
     <div

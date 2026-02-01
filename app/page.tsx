@@ -1490,19 +1490,34 @@ async function rejectConnection(odId: string, connectionId: string, userName: st
 
 // Video call room creation function
 const createDailyRoom = async () => {
-  if (!gameId) return;
+  console.log('Creating room with gameId:', gameId, 'multiplayerActive:', multiplayerActive);
+  if (!gameId) {
+    console.error('No gameId available');
+    setRoomCreationError('No game ID found');
+    return;
+  }
 
   setIsCreatingRoom(true);
   setRoomCreationError(null);
 
   try {
+    console.log('Invoking create-daily-room edge function with gameId:', gameId);
     const { data, error } = await supabase.functions.invoke('create-daily-room', {
       body: { gameId }
     });
 
-    if (error) throw error;
+    if (error) {
+      console.error('Edge function error:', error);
+      throw error;
+    }
+
+    if (!data || !data.url) {
+      console.error('Invalid response from edge function:', data);
+      throw new Error('No room URL returned');
+    }
 
     const roomUrl = data.url;
+    console.log('Room created successfully:', roomUrl);
     setDailyRoomUrl(roomUrl);
 
     // Broadcast room URL to joiner
@@ -1516,10 +1531,11 @@ const createDailyRoom = async () => {
           sender: sbUser?.id ?? 'host',
         },
       });
+      console.log('Broadcasted VIDEO_ROOM_CREATED to joiner');
     }
-  } catch (err) {
+  } catch (err: any) {
     console.error('Failed to create video room:', err);
-    setRoomCreationError('Failed to start video call');
+    setRoomCreationError(err?.message || 'Failed to start video call');
   } finally {
     setIsCreatingRoom(false);
   }
@@ -6957,8 +6973,8 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
     Title screen
   </button>
 
-{/* Video Call Toggle - Only show in multiplayer */}
-{multiplayerActive && !dailyRoomUrl && !opponentQuit && (
+{/* Video Call Toggle - Only host can create, joiner auto-joins when room created */}
+{multiplayerActive && !dailyRoomUrl && !opponentQuit && mySeat === "bottom" && (
   <button
     type="button"
     onClick={createDailyRoom}
@@ -6967,6 +6983,13 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
   >
     {isCreatingRoom ? 'Starting video...' : 'Start Video Call'}
   </button>
+)}
+
+{/* Show waiting message for joiner */}
+{multiplayerActive && !dailyRoomUrl && !opponentQuit && mySeat === "top" && (
+  <span className="text-sm min-[1536px]:max-[1650px]:text-xs text-white/60">
+    Waiting for host to start video...
+  </span>
 )}
 
 {multiplayerActive && videoCallActive && (

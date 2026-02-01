@@ -36,6 +36,46 @@ serve(async (req) => {
       )
     }
 
+    const roomName = `headsup-${gameId}`;
+
+    // First, try to get existing room
+    const checkResponse = await fetch(`https://api.daily.co/v1/rooms/${roomName}`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${DAILY_API_KEY}`
+      }
+    });
+
+    // If room exists and is not expired, return it
+    if (checkResponse.ok) {
+      const existingRoom = await checkResponse.json();
+      const now = Math.floor(Date.now() / 1000);
+
+      // Check if room is still valid (not expired)
+      if (!existingRoom.config?.exp || existingRoom.config.exp > now) {
+        console.log('Reusing existing room:', roomName);
+        return new Response(
+          JSON.stringify({ url: existingRoom.url }),
+          {
+            status: 200,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          }
+        );
+      } else {
+        // Room expired, delete it first
+        console.log('Deleting expired room:', roomName);
+        await fetch(`https://api.daily.co/v1/rooms/${roomName}`, {
+          method: 'DELETE',
+          headers: {
+            'Authorization': `Bearer ${DAILY_API_KEY}`
+          }
+        });
+      }
+    }
+
+    // Create new room
+    console.log('Creating new room:', roomName);
     const response = await fetch('https://api.daily.co/v1/rooms', {
       method: 'POST',
       headers: {
@@ -43,26 +83,26 @@ serve(async (req) => {
         'Authorization': `Bearer ${DAILY_API_KEY}`
       },
       body: JSON.stringify({
-        name: `headsup-${gameId}`,
-        privacy: 'private',
+        name: roomName,
+        privacy: 'public',
         properties: {
-          max_participants: 2,
           enable_chat: false,
           exp: Math.floor(Date.now() / 1000) + 14400 // 4 hours from now
         }
       })
-    })
+    });
 
-    const data = await response.json()
+    const data = await response.json();
 
     if (!response.ok) {
+      console.error('Failed to create room:', data);
       return new Response(
         JSON.stringify({ error: data.error || 'Failed to create room' }),
         {
           status: response.status,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         }
-      )
+      );
     }
 
     return new Response(
