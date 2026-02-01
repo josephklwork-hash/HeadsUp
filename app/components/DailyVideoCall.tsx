@@ -27,21 +27,11 @@ export default function DailyVideoCall({
     height: Math.max(150, Math.min(360, window.innerHeight * 0.33))
   });
 
-  const getInitialPosition = () => {
-    const videoWidth = Math.max(200, Math.min(480, window.innerWidth * 0.25));
-    // Center video on "Title screen" button position
-    // max-w-6xl is 1152px (72rem), centered on page
-    // Title screen button is on right side of this container
-    const maxContentWidth = 1152;
-    const containerRightEdge = (window.innerWidth + maxContentWidth) / 2;
-    // Title screen button is roughly 100-120px from right edge of container
-    const buttonCenterX = containerRightEdge - 100;
-    // Center video window on button
-    return {
-      x: Math.max(20, buttonCenterX - videoWidth / 2),
-      y: Math.max(80, window.innerHeight * 0.28)
-    };
-  };
+  const getInitialPosition = () => ({
+    // Position at ~69% from left, ~28% from top
+    x: Math.max(20, window.innerWidth * 0.69),
+    y: Math.max(80, window.innerHeight * 0.28)
+  });
 
   const [dimensions, setDimensions] = useState({ width: 320, height: 240 });
   const [position, setPosition] = useState({ x: 1390, y: 300 });
@@ -158,6 +148,7 @@ export default function DailyVideoCall({
     if (!isDragging) return;
 
     const handleMouseMove = (e: MouseEvent) => {
+      e.preventDefault();
       const deltaX = e.clientX - dragStartRef.current.x;
       const deltaY = e.clientY - dragStartRef.current.y;
 
@@ -167,16 +158,17 @@ export default function DailyVideoCall({
       });
     };
 
-    const handleMouseUp = () => {
+    const handleMouseUp = (e: MouseEvent) => {
+      e.preventDefault();
       setIsDragging(false);
     };
 
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('mousemove', handleMouseMove, { passive: false });
+    window.addEventListener('mouseup', handleMouseUp, { passive: false });
 
     return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
     };
   }, [isDragging]);
 
@@ -184,6 +176,7 @@ export default function DailyVideoCall({
     if (!isResizing || !resizeCorner) return;
 
     const handleMouseMove = (e: MouseEvent) => {
+      e.preventDefault();
       const deltaX = e.clientX - resizeStartRef.current.x;
       const deltaY = e.clientY - resizeStartRef.current.y;
 
@@ -214,17 +207,18 @@ export default function DailyVideoCall({
       setPosition({ x: newX, y: newY });
     };
 
-    const handleMouseUp = () => {
+    const handleMouseUp = (e: MouseEvent) => {
+      e.preventDefault();
       setIsResizing(false);
       setResizeCorner(null);
     };
 
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('mousemove', handleMouseMove, { passive: false });
+    window.addEventListener('mouseup', handleMouseUp, { passive: false });
 
     return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
     };
   }, [isResizing, resizeCorner]);
 
@@ -236,7 +230,8 @@ export default function DailyVideoCall({
         height: dimensions.height,
         left: position.x,
         top: position.y,
-        cursor: isDragging ? 'grabbing' : 'auto'
+        cursor: isDragging ? 'grabbing' : 'auto',
+        userSelect: 'none'
       }}
     >
       {/* Drag handle bar */}
@@ -256,25 +251,10 @@ export default function DailyVideoCall({
         className="w-full h-full rounded-xl border-2 border-white/20 overflow-hidden shadow-lg bg-black"
       />
 
-      {/* Resize handles - all 4 corners (larger and higher z-index) */}
-      <div
-        onMouseDown={(e) => handleResizeStart(e, 'tl')}
-        className="absolute top-0 left-0 w-8 h-8 cursor-nwse-resize bg-white/40 hover:bg-white/60 z-20 transition-colors"
-        style={{ borderTopLeftRadius: '12px' }}
-      />
-      <div
-        onMouseDown={(e) => handleResizeStart(e, 'tr')}
-        className="absolute top-0 right-0 w-8 h-8 cursor-nesw-resize bg-white/40 hover:bg-white/60 z-20 transition-colors"
-        style={{ borderTopRightRadius: '12px' }}
-      />
-      <div
-        onMouseDown={(e) => handleResizeStart(e, 'bl')}
-        className="absolute bottom-0 left-0 w-8 h-8 cursor-nesw-resize bg-white/40 hover:bg-white/60 z-20 transition-colors"
-        style={{ borderBottomLeftRadius: '12px' }}
-      />
+      {/* Resize handle - bottom-right corner only */}
       <div
         onMouseDown={(e) => handleResizeStart(e, 'br')}
-        className="absolute bottom-0 right-0 w-8 h-8 cursor-nwse-resize bg-white/40 hover:bg-white/60 z-20 transition-colors"
+        className="absolute bottom-0 right-0 w-6 h-6 cursor-nwse-resize bg-white/50 hover:bg-white/70 z-20 transition-colors"
         style={{ borderBottomRightRadius: '12px' }}
       />
     </div>
