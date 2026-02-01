@@ -23,8 +23,8 @@ export default function DailyVideoCall({
 
   // Initialize with viewport-relative values for responsiveness
   const getInitialDimensions = () => ({
-    width: Math.max(200, Math.min(480, window.innerWidth * 0.25)),
-    height: Math.max(150, Math.min(360, window.innerHeight * 0.33))
+    width: Math.max(640, Math.min(800, window.innerWidth * 0.33)),
+    height: Math.max(480, Math.min(600, window.innerHeight * 0.44))
   });
 
   const getInitialPosition = () => ({
