@@ -23,15 +23,18 @@ export default function DailyVideoCall({
 
   // Initialize with viewport-relative values for responsiveness
   const getInitialDimensions = () => ({
-    width: Math.max(640, Math.min(800, window.innerWidth * 0.33)),
-    height: Math.max(480, Math.min(600, window.innerHeight * 0.44))
+    width: Math.max(480, Math.min(640, window.innerWidth * 0.3)),
+    height: Math.max(360, Math.min(480, window.innerHeight * 0.4))
   });
 
-  const getInitialPosition = () => ({
-    // Position at ~69% from left, ~28% from top
-    x: Math.max(20, window.innerWidth * 0.69),
-    y: Math.max(80, window.innerHeight * 0.28)
-  });
+  const getInitialPosition = () => {
+    const width = Math.max(480, Math.min(640, window.innerWidth * 0.3));
+    // Position with enough padding from right edge to avoid overflow
+    return {
+      x: Math.min(window.innerWidth - width - 40, window.innerWidth * 0.65),
+      y: Math.max(80, window.innerHeight * 0.28)
+    };
+  };
 
   const [dimensions, setDimensions] = useState({ width: 320, height: 240 });
   const [position, setPosition] = useState({ x: 1390, y: 300 });
