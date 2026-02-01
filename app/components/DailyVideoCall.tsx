@@ -252,6 +252,7 @@ export default function DailyVideoCall({
       <div
         ref={callContainerRef}
         className="w-full h-full rounded-xl border-2 border-white/20 overflow-hidden shadow-lg bg-black"
+        style={{ pointerEvents: 'auto' }}
       />
 
       {/* Resize handle - bottom-right corner only */}
