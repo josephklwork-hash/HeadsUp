@@ -227,7 +227,7 @@ export default function DailyVideoCall({
 
   return (
     <div
-      className="fixed"
+      className="fixed z-[60]"
       style={{
         width: dimensions.width,
         height: dimensions.height,
