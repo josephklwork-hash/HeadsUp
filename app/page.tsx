@@ -4654,30 +4654,6 @@ const joinGame = () => {
 >
   Join Game
 </button>
-
-      <button
-  onClick={() => {
-    clearTimers();
-    setJoinMode(false);
-    setGamePin(null);
-    setMultiplayerActive(true);
-    setGameId('test-game-' + Date.now());
-    setMySeat('bottom');
-    setSeatedRole('student');
-    setBetSize(2);
-    setScreen("game");
-  }}
-  className={`
-    ${baseButton}
-    py-4
-    min-[1536px]:max-[1650px]:py-3
-    text-sm
-    min-[1536px]:max-[1650px]:text-xs
-    opacity-60
-  `}
->
-  Go to Game (Test)
-</button>
     </div>
   )}
 </div>

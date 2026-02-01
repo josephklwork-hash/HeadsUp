@@ -32,7 +32,7 @@ export default function DailyVideoCall({
     // Position with enough padding from right edge to avoid overflow
     return {
       x: Math.min(window.innerWidth - width - 40, window.innerWidth * 0.65),
-      y: Math.max(80, window.innerHeight * 0.28)
+      y: Math.max(60, window.innerHeight * 0.15)
     };
   };
 
@@ -240,12 +240,12 @@ export default function DailyVideoCall({
       {/* Drag handle bar */}
       <div
         onMouseDown={handleDragStart}
-        className="absolute top-0 left-8 right-8 h-6 bg-gradient-to-b from-black/60 to-transparent cursor-grab active:cursor-grabbing z-10 flex items-center justify-center"
+        className="absolute top-0 left-0 right-0 h-8 bg-gradient-to-b from-black/70 to-transparent cursor-grab active:cursor-grabbing z-30 flex items-center justify-center rounded-t-xl"
       >
         <div className="flex gap-1">
-          <div className="w-1 h-1 rounded-full bg-white/40"></div>
-          <div className="w-1 h-1 rounded-full bg-white/40"></div>
-          <div className="w-1 h-1 rounded-full bg-white/40"></div>
+          <div className="w-1.5 h-1.5 rounded-full bg-white/50"></div>
+          <div className="w-1.5 h-1.5 rounded-full bg-white/50"></div>
+          <div className="w-1.5 h-1.5 rounded-full bg-white/50"></div>
         </div>
       </div>
 
