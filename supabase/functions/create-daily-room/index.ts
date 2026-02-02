@@ -87,7 +87,10 @@ serve(async (req) => {
         privacy: 'public',
         properties: {
           enable_chat: false,
-          exp: Math.floor(Date.now() / 1000) + 14400 // 4 hours from now
+          enable_screenshare: false,
+          enable_recording: false,
+          max_participants: 2, // Heads-up game only
+          exp: Math.floor(Date.now() / 1000) + 7200 // 2 hours (reduced from 4)
         }
       })
     });

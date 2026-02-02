@@ -69,6 +69,7 @@ gameSession: number;
     winner: Seat | "tie" | null;
     reason: "fold" | "showdown" | null;
     message: string;
+    potWon: number; // Total pot won by winner (for display)
   };
   
   // State flags
@@ -272,6 +273,7 @@ private createInitialState(initialDealerOffset: 0 | 1): HostState {
         winner: null,
         reason: null,
         message: "",
+        potWon: 0,
       },
       gameOver: false,
       blindsPosted: false,
@@ -386,6 +388,7 @@ public startHand() {
       winner: null,
       reason: null,
       message: "",
+      potWon: 0,
     };
     this.state.actionLog = [];
     this.state.actionSequence = 0;
@@ -453,9 +456,13 @@ public startHand() {
    */
   public processAction(seat: Seat, action: GameAction) {
     // Validate it's this seat's turn
-    if (this.state.toAct !== seat) return;
-    if (this.state.handResult.status !== "playing") return;
-    
+    if (this.state.toAct !== seat) {
+      return;
+    }
+    if (this.state.handResult.status !== "playing") {
+      return;
+    }
+
     // Process the action
     switch (action.type) {
       case "FOLD":
@@ -487,12 +494,13 @@ if (this.onStateChange) {
     this.logAction(seat, "Folds");
     
     const potSize = this.state.game.pot + this.state.game.bets.top + this.state.game.bets.bottom;
-    
+
     this.state.handResult = {
       status: "ended",
       winner,
       reason: "fold",
       message: `${winner === "bottom" ? "You" : "Opponent"} wins`,
+      potWon: potSize,
     };
     
     // Award pot
@@ -641,10 +649,17 @@ if (this.onStateChange) {
     // Pull bets into pot
     this.state.game.pot += this.state.game.bets.top + this.state.game.bets.bottom;
     this.state.game.bets = { top: 0, bottom: 0 };
-    
+
     // Check if anyone is all-in
     const someoneAllIn = this.state.game.stacks.top <= 0 || this.state.game.stacks.bottom <= 0;
-    
+
+    // If someone is all-in before river, jump to river and resolve immediately
+    if (someoneAllIn && this.state.street < 5) {
+      this.state.street = 5;
+      this.resolveShowdown();
+      return;
+    }
+
     // Advance to next street
     if (this.state.street === 0) {
       this.state.street = 3; // Flop
@@ -657,20 +672,13 @@ if (this.onStateChange) {
       this.resolveShowdown();
       return;
     }
-    
-    // If someone is all-in postflop, run it out to river immediately
-    if (someoneAllIn && this.state.street < 5) {
-      this.state.street = 5;
-      this.resolveShowdown();
-      return;
-    }
-    
+
     // Reset street state
     this.state.checked = { top: false, bottom: false };
     this.state.lastAggressor = null;
     this.state.actionsThisStreet = 0;
     this.state.lastRaiseSize = this.BB; // Reset to BB for new street
-    
+
     // Non-dealer acts first postflop
     const dealerSeat = this.state.dealerOffset === 0 ? "top" : "bottom";
     this.state.toAct = dealerSeat === "top" ? "bottom" : "top";
@@ -697,12 +705,16 @@ if (this.onStateChange) {
     } else {
       winner = "tie";
     }
-    
+
+    // Calculate pot size (including any remaining bets)
+    const potSize = this.state.game.pot + this.state.game.bets.top + this.state.game.bets.bottom;
+
     this.state.handResult = {
       status: "ended",
       winner,
       reason: "showdown",
       message: winner === "bottom" ? "You win" : winner === "top" ? "Opponent wins" : "Tie",
+      potWon: potSize,
     };
     
     // Determine show order: OOP shows first on check-check river, otherwise last aggressor shows first
@@ -716,11 +728,9 @@ if (this.onStateChange) {
     const firstToShow: Seat = riverCheckedThrough ? nonDealerSeat : (this.state.lastAggressor || nonDealerSeat);
     const secondToShow: Seat = firstToShow === "top" ? "bottom" : "top";
     
-    // Check if someone is all-in - if so, both must show
-    const someoneAllIn = this.state.game.stacks.top <= 0 || this.state.game.stacks.bottom <= 0;
-    
-    // Second player only shows if they win or tie (can muck if they lose) - unless all-in
-    const secondShows = someoneAllIn || winner === "tie" || winner === secondToShow;
+    // Second player (caller) only shows if they win or tie (can muck if they lose)
+    // This follows standard poker rules: aggressor shows first, caller can muck losing hands
+    const secondShows = winner === "tie" || winner === secondToShow;
     
     const topShows = firstToShow === "top" || (secondToShow === "top" && secondShows);
     const bottomShows = firstToShow === "bottom" || (secondToShow === "bottom" && secondShows);
@@ -770,9 +780,8 @@ if (this.onStateChange) {
       this.logAction(secondToShow, "Mucked");
     }
     
-    // Award pot
-    const potSize = this.state.game.pot + this.state.game.bets.top + this.state.game.bets.bottom;
-    
+    // Award pot (potSize already calculated above)
+
     if (winner === "tie") {
       const half = potSize / 2;
       this.state.game.stacks.top += half;

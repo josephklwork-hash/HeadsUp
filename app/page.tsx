@@ -51,6 +51,7 @@ type HandResult = {
   winner: Seat | "tie" | null;
   reason: HandEndReason;
   message: string;
+  potWon: number;
 };
 
 type ActionLogItem = {
@@ -80,6 +81,10 @@ type HandLogSnapshot = {
 
   heroStartStack: number;
   oppStartStack: number;
+
+  // Hand ranks for display in history
+  heroHandRank: string | null;
+  oppHandRank: string | null;
   
   // Best 5-card hands
   heroBest5?: Card[];
@@ -925,7 +930,7 @@ const BB = BASE_BB; // always 1
   toAct: "bottom",
 
   actionLog: [],
-  handResult: { status: "playing", winner: null, reason: null, message: "" },
+  handResult: { status: "playing", winner: null, reason: null, message: "", potWon: 0 },
 
   gameOver: false,
   endedBoardSnapshot: 0,
@@ -1202,6 +1207,9 @@ const [mpJoiner, setMpJoiner] = useState<MultiplayerJoiner | null>(null);
 const mpHostRef = useRef<MultiplayerHost | null>(null);
 const mpJoinerRef = useRef<MultiplayerJoiner | null>(null);
 
+// Prevent rapid successive button clicks (fixes auto-check bug)
+const [actionInProgress, setActionInProgress] = useState(false);
+
 // Store the multiplayer state (received from host or from local host controller)
 const [mpState, setMpState] = useState<HostState | null>(null);
 
@@ -1275,6 +1283,9 @@ const [dealtCards, setDealtCards] = useState<{
   river: false,
 });
 
+// Track when river animation + 1s delay is complete
+const [riverAnimationComplete, setRiverAnimationComplete] = useState(false);
+
 // Card flip animation state for reveals
 const [flippedCards, setFlippedCards] = useState<{
   oppCard1: boolean;
@@ -1288,19 +1299,34 @@ const [flippedCards, setFlippedCards] = useState<{
   myCard2: false,
 });
 
+// Win animation state
+const [showWinAnimation, setShowWinAnimation] = useState<'hero' | 'opponent' | null>(null);
+const [winAmount, setWinAmount] = useState<number>(0);
+
+// Track which cards are visible (after dealing animation completes)
+const [cardsVisible, setCardsVisible] = useState<{
+  sbCard1: boolean;
+  bbCard1: boolean;
+  sbCard2: boolean;
+  bbCard2: boolean;
+}>({
+  sbCard1: false,
+  bbCard1: false,
+  sbCard2: false,
+  bbCard2: false,
+});
+
 // Trigger card dealing animations
 useEffect(() => {
   // Check for cards in both local state (host) and multiplayer state (joiner)
   const hasCards = cards || (mpState?.cards);
-  console.log('🎴 Card animation effect - handId:', handId, 'cards:', !!cards, 'mpState.cards:', !!(mpState?.cards), 'hasCards:', !!hasCards);
 
   // Skip if we've already animated this hand
   if (lastAnimatedHandRef.current === handId) {
-    console.log('⏭️ Already animated handId:', handId, '- skipping');
     return;
   }
 
-  // Reset animations first
+  // Reset all animations for new hand
   setDealtCards({
     sbCard1: false,
     bbCard1: false,
@@ -1321,45 +1347,54 @@ useEffect(() => {
     myCard2: false,
   });
 
+  // Reset cards visible state
+  setCardsVisible({
+    sbCard1: false,
+    bbCard1: false,
+    sbCard2: false,
+    bbCard2: false,
+  });
+
   if (!hasCards) {
-    console.log('❌ No cards - skipping animation');
     return;
   }
 
   // Mark this hand as animated
   lastAnimatedHandRef.current = handId;
-  console.log('🔒 Locked animation for handId:', handId);
 
   // Deal hole cards sequentially: SB card 1, BB card 1, SB card 2, BB card 2
   const dealHoleCards = async () => {
-    console.log('▶️ Starting card dealing...');
-
     // Start immediately
-    console.log('✅ SB card 1');
     setDealtCards(prev => ({ ...prev, sbCard1: true }));
+    setCardsVisible(prev => ({ ...prev, sbCard1: true }));
 
     await new Promise(r => setTimeout(r, 100));
-    console.log('✅ BB card 1');
     setDealtCards(prev => ({ ...prev, bbCard1: true }));
+    setCardsVisible(prev => ({ ...prev, bbCard1: true }));
 
     await new Promise(r => setTimeout(r, 100));
-    console.log('✅ SB card 2');
     setDealtCards(prev => ({ ...prev, sbCard2: true }));
+    setCardsVisible(prev => ({ ...prev, sbCard2: true }));
 
     await new Promise(r => setTimeout(r, 100));
-    console.log('✅ BB card 2');
     setDealtCards(prev => ({ ...prev, bbCard2: true }));
+    setCardsVisible(prev => ({ ...prev, bbCard2: true }));
 
-    console.log('🎉 All cards dealt!');
+    // After all dealing animations complete (400ms animation + slight buffer), remove animation classes
+    await new Promise(r => setTimeout(r, 500));
+    setDealtCards(prev => ({
+      ...prev,
+      sbCard1: false,
+      bbCard1: false,
+      sbCard2: false,
+      bbCard2: false,
+    }));
   };
 
   dealHoleCards();
 }, [handId, cards, mpState?.cards]); // Trigger for both host and joiner
 
 // Debug: Log dealtCards state changes
-useEffect(() => {
-  console.log('📊 dealtCards state:', dealtCards);
-}, [dealtCards]);
 
 const [studentProfile, setStudentProfile] = useState({
   firstName: "",
@@ -1604,18 +1639,26 @@ async function rejectConnection(odId: string, connectionId: string, userName: st
 
 // Video call room creation function
 const createDailyRoom = async () => {
-  console.log('Creating room with gameId:', gameId, 'multiplayerActive:', multiplayerActive);
+  // Rate limit: prevent creating more than 1 room per 30 seconds
+  const now = Date.now();
+  const timeSinceLastCreation = now - lastRoomCreationRef.current;
+  if (timeSinceLastCreation < 30000) {
+    const waitTime = Math.ceil((30000 - timeSinceLastCreation) / 1000);
+    setRoomCreationError(`Please wait ${waitTime} seconds before creating another room`);
+    return;
+  }
+
   if (!gameId) {
     console.error('No gameId available');
     setRoomCreationError('No game ID found');
     return;
   }
 
+  lastRoomCreationRef.current = now;
   setIsCreatingRoom(true);
   setRoomCreationError(null);
 
   try {
-    console.log('Invoking create-daily-room edge function with gameId:', gameId);
     const { data, error } = await supabase.functions.invoke('create-daily-room', {
       body: { gameId }
     });
@@ -1631,7 +1674,6 @@ const createDailyRoom = async () => {
     }
 
     const roomUrl = data.url;
-    console.log('Room created successfully:', roomUrl);
     setDailyRoomUrl(roomUrl);
 
     // Broadcast room URL to joiner
@@ -1645,7 +1687,6 @@ const createDailyRoom = async () => {
           sender: sbUser?.id ?? 'host',
         },
       });
-      console.log('Broadcasted VIDEO_ROOM_CREATED to joiner');
     }
   } catch (err: any) {
     console.error('Failed to create video room:', err);
@@ -1666,6 +1707,7 @@ const [savingProfile, setSavingProfile] = useState(false);
   const actionLogRef = useRef<ActionLogItem[]>([]);
   const endedStreetRef = useRef<Street>(0);
   const blindsPostedRef = useRef(false);
+  const lastRoomCreationRef = useRef<number>(0);
   const blindsKeyRef = useRef<string | null>(null);
   const gameRef = useRef(game);
   const streetRef = useRef<Street>(street);
@@ -2456,42 +2498,58 @@ const displayBottomShowed = multiplayerActive && mpState ? mpState.bottomShowed 
 
   // Trigger board card animations based on street
   useEffect(() => {
-    console.log('🃏 Board animation effect - displayStreet:', displayStreet);
     if (displayStreet < 3) {
-      console.log('⏭️ DisplayStreet < 3, no board cards yet');
+      // Clear board card animations when starting new hand
+      setDealtCards(prev => ({
+        ...prev,
+        flop1: false,
+        flop2: false,
+        flop3: false,
+        turn: false,
+        river: false,
+      }));
       return; // No board cards yet
     }
 
     const dealBoardCards = async () => {
-      if (displayStreet >= 3) {
-        // Flop (3 cards)
-        console.log('🌊 Dealing flop...');
-        await new Promise(r => setTimeout(r, 200));
-        console.log('✅ Flop card 1');
+      // Check if this is an all-in situation
+      // Multiple checks to ensure we catch all scenarios:
+      // 1. Local game ref
+      // 2. Multiplayer: opponent revealed at river (both all-in)
+      // 3. Multiplayer: hand ended by showdown at river (all-in runout)
+      const isAllIn = allInCallThisHandRef.current ||
+                      (multiplayerActive && displayStreet === 5 && displayOppRevealed) ||
+                      (multiplayerActive && displayStreet === 5 && displayHandResult.status === "ended" && displayHandResult.reason === "showdown");
+
+      // Initial delay after all-in call before runout starts (only if flop not dealt yet)
+      if (isAllIn && !dealtCards.flop1) {
+        await new Promise(r => setTimeout(r, 1000));
+      }
+
+      if (displayStreet >= 3 && !dealtCards.flop3) {
+        // Only deal flop if not already dealt
+        // All-in: 1500ms delay, Normal: 200ms delay
+        await new Promise(r => setTimeout(r, isAllIn ? 1500 : 200));
         setDealtCards(prev => ({ ...prev, flop1: true }));
 
         await new Promise(r => setTimeout(r, 100));
-        console.log('✅ Flop card 2');
         setDealtCards(prev => ({ ...prev, flop2: true }));
 
         await new Promise(r => setTimeout(r, 100));
-        console.log('✅ Flop card 3');
         setDealtCards(prev => ({ ...prev, flop3: true }));
       }
 
-      if (displayStreet >= 4) {
-        // Turn
-        console.log('🔄 Dealing turn...');
-        await new Promise(r => setTimeout(r, 300));
-        console.log('✅ Turn card');
+      if (displayStreet >= 4 && !dealtCards.turn) {
+        // Only deal turn if not already dealt
+        // All-in: 2000ms delay, Normal: 300ms delay
+        await new Promise(r => setTimeout(r, isAllIn ? 2000 : 300));
         setDealtCards(prev => ({ ...prev, turn: true }));
       }
 
-      if (displayStreet >= 5) {
-        // River
-        console.log('🌊 Dealing river...');
-        await new Promise(r => setTimeout(r, 300));
-        console.log('✅ River card');
+      if (displayStreet >= 5 && !dealtCards.river) {
+        // Only deal river if not already dealt
+        // All-in: 3000ms delay, Normal: 300ms delay
+        await new Promise(r => setTimeout(r, isAllIn ? 3000 : 300));
         setDealtCards(prev => ({ ...prev, river: true }));
       }
     };
@@ -2504,6 +2562,44 @@ const displayBottomShowed = multiplayerActive && mpState ? mpState.bottomShowed 
   const didIShow = myActualSeat === "top" ? displayTopShowed : displayBottomShowed;
   const didOppShow = myActualSeat === "top" ? displayBottomShowed : displayTopShowed;
 
+  // Add 1 second delay after river is dealt before showing win animations (only for all-in scenarios)
+  useEffect(() => {
+    if (dealtCards.river) {
+      // Only delay if there was an all-in and call
+      // Multiple checks to ensure we catch all scenarios:
+      const wasAllInCall = allInCallThisHandRef.current ||
+                           (multiplayerActive && displayOppRevealed && displayStreet === 5) ||
+                           (multiplayerActive && displayStreet === 5 && displayHandResult.status === "ended" && displayHandResult.reason === "showdown");
+      const delay = wasAllInCall ? 1000 : 0; // 1s for all-in, immediate for normal hands
+
+      const timer = setTimeout(() => {
+        setRiverAnimationComplete(true);
+      }, delay);
+      return () => clearTimeout(timer);
+    } else {
+      setRiverAnimationComplete(false);
+    }
+  }, [dealtCards.river, multiplayerActive, displayOppRevealed, displayStreet]);
+
+  // Trigger win animation when hand ends AND river is dealt
+  useEffect(() => {
+    if (displayHandResult?.status === "ended" && displayHandResult.winner && displayHandResult.winner !== "tie") {
+      // Determine if hero won (skip for ties - no win animation on split pots)
+      const heroWon = displayHandResult.winner === myActualSeat;
+      setShowWinAnimation(heroWon ? 'hero' : 'opponent');
+
+      // Get win amount - use potWon from handResult (total pot won)
+      const amount = displayHandResult.potWon || 0;
+
+      setWinAmount(amount);
+      // Animation will stay visible until next hand starts (status !== "ended") or game is over
+    } else if (!((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver))) {
+      // Only clear if not in a game over state
+      setShowWinAnimation(null);
+      setWinAmount(0);
+    }
+  }, [displayHandResult.status, displayHandResult.winner, displayHandResult.potWon, displayHandResult.message, myActualSeat, dealtCards.river, displayStreet, multiplayerActive, mpState?.gameOver, gameOver]);
+
   // Refs to track previous show states
   const prevOppShowRef = useRef(false);
   const prevMyShowRef = useRef(false);
@@ -2511,8 +2607,8 @@ const displayBottomShowed = multiplayerActive && mpState ? mpState.bottomShowed 
   // Trigger flip animation when opponent's cards are revealed
   useEffect(() => {
     const oppShouldShow = (
-      // Required to show at showdown
-      (displayHandResult.status === "ended" && displayHandResult.reason === "showdown" && (
+      // Required to show at showdown (only after river animation completes or if hand ended before river)
+      ((riverAnimationComplete || displayStreet < 5) && displayHandResult.status === "ended" && displayHandResult.reason === "showdown" && (
         myActualSeat === "bottom"
           ? displayOppRevealed  // I'm host: oppRevealed = top showed = opponent showed
           : !displayYouMucked   // I'm joiner: youMucked = bottom mucked = opponent mucked, so !youMucked = opponent showed
@@ -2523,7 +2619,6 @@ const displayBottomShowed = multiplayerActive && mpState ? mpState.bottomShowed 
 
     // Only trigger animation on transition from false to true
     if (oppShouldShow && !prevOppShowRef.current) {
-      console.log('🔄 Opponent cards revealed - triggering flip animation');
       setFlippedCards(prev => ({ ...prev, oppCard1: true, oppCard2: true }));
       // Reset after animation completes
       setTimeout(() => {
@@ -2532,13 +2627,12 @@ const displayBottomShowed = multiplayerActive && mpState ? mpState.bottomShowed 
     }
 
     prevOppShowRef.current = oppShouldShow;
-  }, [displayOppRevealed, displayYouMucked, didOppShow, displayHandResult, myActualSeat]);
+  }, [displayOppRevealed, displayYouMucked, didOppShow, displayHandResult, myActualSeat, riverAnimationComplete, displayStreet]);
 
   // Trigger flip animation when I click Show Hand
   useEffect(() => {
     // Only trigger animation on transition from false to true
     if (didIShow && !prevMyShowRef.current) {
-      console.log('🔄 My cards revealed - triggering flip animation');
       setFlippedCards(prev => ({ ...prev, myCard1: true, myCard2: true }));
       // Reset after animation completes
       setTimeout(() => {
@@ -2550,8 +2644,10 @@ const displayBottomShowed = multiplayerActive && mpState ? mpState.bottomShowed 
   }, [didIShow]);
 
   // Game state from my perspective
-  const myStack = displayGame.stacks[myActualSeat];
-const oppStack = displayGame.stacks[oppActualSeat];
+  // During all-in animation, show stacks BEFORE pot was awarded (subtract win amount from winner)
+  const isAnimatingAllIn = displayHandResult.status === "ended" && !riverAnimationComplete && displayStreet === 5;
+  const myStack = displayGame.stacks[myActualSeat] - (isAnimatingAllIn && showWinAnimation === 'hero' ? winAmount : 0);
+  const oppStack = displayGame.stacks[oppActualSeat] - (isAnimatingAllIn && showWinAnimation === 'opponent' ? winAmount : 0);
   const myBet = displayGame.bets[myActualSeat];
 const oppBet = displayGame.bets[oppActualSeat];
   
@@ -2562,7 +2658,8 @@ const oppBet = displayGame.bets[oppActualSeat];
   const myLabel = amIDealer ? "SB" : "BB";
   const oppLabel = amIDealer ? "BB" : "SB";
 
-  const isBottomTurn = seatedRole && displayToAct === mySeat && displayHandResult.status === "playing";
+  // Check if it's player's turn AND not in an all-in situation where cards are revealed
+  const isBottomTurn = seatedRole && displayToAct === mySeat && displayHandResult.status === "playing" && !displayOppRevealed;
 
   const [handStartStacks, setHandStartStacks] = useState<{ top: number; bottom: number }>({
   top: STARTING_STACK_BB,
@@ -2821,7 +2918,7 @@ function applyRemoteReset(p: {
 
   setCards(p.cards);
 
-  setHandResult({ status: "playing", winner: null, reason: null, message: "" });
+  setHandResult({ status: "playing", winner: null, reason: null, message: "", potWon: 0 });
   setStreet(0);
   setChecked({ top: false, bottom: false });
   setLastAggressor(null);
@@ -2916,6 +3013,14 @@ function applyRemoteReset(p: {
 
       heroStartStack: handStartStacks.bottom,
       oppStartStack: handStartStacks.top,
+
+      // Calculate hand ranks if cards were shown
+      heroHandRank: youC && youD && endedSt >= 3
+        ? handRankOnly(evaluate7([youC, youD, ...board.slice(0, endedSt)]))
+        : null,
+      oppHandRank: oppA && oppB && endedSt >= 3
+        ? handRankOnly(evaluate7([oppA, oppB, ...board.slice(0, endedSt)]))
+        : null,
     };
 
     // Don't add duplicate snapshots for the same hand
@@ -3030,27 +3135,32 @@ setToAct(firstToAct);
   // Game is over if either stack is 0 (or below due to rounding)
   const shouldEndGame = nextStacks.top <= 0 || nextStacks.bottom <= 0;
 
-  // Commit the chip state
-  setGame({
-    pot: 0,
-    bets: { top: 0, bottom: 0 },
-    stacks: nextStacks,
-  });
-
   // Mark hand ended + snapshot
-  setHandResult({ status: "ended", winner, reason, message });
+  setHandResult({ status: "ended", winner, reason, message, potWon: fullPot });
 
   setTimeout(() => snapshotCurrentHandLog(), 0);
 
-  // If this hand ends the match, freeze here.
-  if (shouldEndGame) {
+  // If all-in and call, delay stack update until after river animation
+  const wasAllInCall = allInCallThisHandRef.current;
+  const stackUpdateDelay = wasAllInCall ? 8200 : 0; // 1s + 1.7s (flop) + 2s (turn) + 3s (river) + 500ms buffer
 
-    setTimeout(() => {
-      gameOverRef.current = true;
-      setGameOver(true);
-      clearTimers();
-    }, multiplayerActive ? 150 : 0);
-  }
+  setTimeout(() => {
+    // Commit the chip state
+    setGame({
+      pot: 0,
+      bets: { top: 0, bottom: 0 },
+      stacks: nextStacks,
+    });
+
+    // If this hand ends the match, freeze here.
+    if (shouldEndGame) {
+      setTimeout(() => {
+        gameOverRef.current = true;
+        setGameOver(true);
+        clearTimers();
+      }, multiplayerActive ? 150 : 0);
+    }
+  }, stackUpdateDelay);
 }
 
  function startNewHand() {
@@ -3060,7 +3170,7 @@ setToAct(firstToAct);
     allInCallThisHandRef.current = false;
     actionSequenceRef.current = 0;
 
-    setHandResult({ status: "playing", winner: null, reason: null, message: "" });
+    setHandResult({ status: "playing", winner: null, reason: null, message: "", potWon: 0 });
     setActionLog([]);
     actionLogRef.current = [];
     setStreet(0);
@@ -3118,7 +3228,7 @@ streetRef.current = 0;
 const nextCards = drawUniqueCards(9);
 setCards(nextCards);
 
-    setHandResult({ status: "playing", winner: null, reason: null, message: "" });
+    setHandResult({ status: "playing", winner: null, reason: null, message: "", potWon: 0 });
     setActionLog([]);
     actionLogRef.current = [];
     actionSequenceRef.current = 0;
@@ -3214,13 +3324,68 @@ const youRaw2 = mySeat === "bottom" ? bottomRaw2 : topRaw2;
   if (multiplayerActive && !isHost && mpState && !mpState.cards) {
   }
 
+  // Dynamic hand rank that updates as board cards are dealt
   const heroHandRank = useMemo(() => {
+  if (!youC || !youD) return null;
+
+  // Determine how many board cards are visible based on animation state
+  let visibleBoardCount = 0;
+  if (dealtCards.flop3) visibleBoardCount = 3;
+  if (dealtCards.turn) visibleBoardCount = 4;
+  if (dealtCards.river) visibleBoardCount = 5;
+
+  // Preflop: show hand strength with just 2 cards
+  if (visibleBoardCount === 0) {
+    if (youC.rank === youD.rank) {
+      return `Pair of ${VALUE_TO_NAME[RANK_TO_VALUE[youC.rank]]}s`;
+    } else {
+      const higherCard = RANK_TO_VALUE[youC.rank] > RANK_TO_VALUE[youD.rank] ? youC : youD;
+      return `High Card, ${VALUE_TO_NAME[RANK_TO_VALUE[higherCard.rank]]}`;
+    }
+  }
+
+  const shownBoard = board.slice(0, visibleBoardCount);
+  const score = evaluate7([youC, youD, ...shownBoard]);
+  return handRankOnly(score);
+}, [youC, youD, board, dealtCards.flop3, dealtCards.turn, dealtCards.river]);
+
+  const oppHandRank = useMemo(() => {
+  if (!oppA || !oppB) return null;
+
+  // Determine how many board cards are visible based on animation state
+  let visibleBoardCount = 0;
+  if (dealtCards.flop3) visibleBoardCount = 3;
+  if (dealtCards.turn) visibleBoardCount = 4;
+  if (dealtCards.river) visibleBoardCount = 5;
+
+  // Preflop: show hand strength with just 2 cards
+  if (visibleBoardCount === 0) {
+    if (oppA.rank === oppB.rank) {
+      return `Pair of ${VALUE_TO_NAME[RANK_TO_VALUE[oppA.rank]]}s`;
+    } else {
+      const higherCard = RANK_TO_VALUE[oppA.rank] > RANK_TO_VALUE[oppB.rank] ? oppA : oppB;
+      return `High Card, ${VALUE_TO_NAME[RANK_TO_VALUE[higherCard.rank]]}`;
+    }
+  }
+
+  const shownBoard = board.slice(0, visibleBoardCount);
+  const score = evaluate7([oppA, oppB, ...shownBoard]);
+  return handRankOnly(score);
+}, [oppA, oppB, board, dealtCards.flop3, dealtCards.turn, dealtCards.river]);
+
+  const heroBest5 = useMemo(() => {
   if (!youC || !youD) return null;
   if (displayStreet === 0) return null; // only postflop
   const shownBoard = board.slice(0, displayStreet);
-  const score = evaluate7([youC, youD, ...shownBoard]);
-  return handRankOnly(score);
+  return sortBest5ForDisplay(best5From7([youC, youD, ...shownBoard]));
 }, [youC, youD, board, displayStreet]);
+
+  const oppBest5 = useMemo(() => {
+  if (!oppA || !oppB) return null;
+  if (displayStreet === 0) return null; // only postflop
+  const shownBoard = board.slice(0, displayStreet);
+  return sortBest5ForDisplay(best5From7([oppA, oppB, ...shownBoard]));
+}, [oppA, oppB, board, displayStreet]);
 
   /* post blinds at start of each hand */
 useEffect(() => {
@@ -3236,7 +3401,7 @@ useEffect(() => {
     }
 
     // reset per-hand state
-    setHandResult({ status: "playing", winner: null, reason: null, message: "" });
+    setHandResult({ status: "playing", winner: null, reason: null, message: "", potWon: 0 });
     allInCallThisHandRef.current = false;
     setStreet(0);
     setChecked({ top: false, bottom: false });
@@ -3889,13 +4054,26 @@ if (street === 5 && currentFacingBet(seat)) {
     | { type: "BET_RAISE_TO"; to: number };
 
   function dispatchAction(action: GameAction) {
+  // Prevent rapid successive clicks (fixes auto-check bug from double-clicking)
+  if (actionInProgress) {
+    return;
+  }
+
+  // Set flag to prevent additional clicks for 300ms
+  setActionInProgress(true);
+  setTimeout(() => setActionInProgress(false), 300);
+
   // In multiplayer mode, use the controllers
   if (multiplayerActive && mpState) {
     const seat: Seat = mySeat;
-    
-    if (mpState.handResult.status !== "playing") return;
-    if (mpState.toAct !== seat) return;
-    
+
+    if (mpState.handResult.status !== "playing") {
+      return;
+    }
+    if (mpState.toAct !== seat) {
+      return;
+    }
+
     if (isHost && mpHost) {
       // HOST: Process action directly
       mpHost.processAction(seat, action);
@@ -4157,7 +4335,10 @@ useEffect(() => {
     
     heroStartStack: mpState.handStartStacks[mySeat],
     oppStartStack: mpState.handStartStacks[mySeat === "bottom" ? "top" : "bottom"],
-    
+
+    heroHandRank: heroHandDesc ? handRankOnly(evaluate7([myCards[0], myCards[1], ...board.slice(0, mpState.street)])) : null,
+    oppHandRank: oppHandDesc ? handRankOnly(evaluate7([oppCards[0], oppCards[1], ...board.slice(0, mpState.street)])) : null,
+
     heroBest5,
     oppBest5,
     heroHandDesc,
@@ -4215,6 +4396,8 @@ useEffect(() => {
       oppShown: mpState.oppRevealed,
       heroStartStack: mpState.handStartStacks[mySeat],
       oppStartStack: mpState.handStartStacks[mySeat === "bottom" ? "top" : "bottom"],
+      heroHandRank: endedSt >= 3 ? handRankOnly(evaluate7([...myCards, ...board.slice(0, endedSt)])) : null,
+      oppHandRank: endedSt >= 3 ? handRankOnly(evaluate7([...oppCards, ...board.slice(0, endedSt)])) : null,
     };
     
     setHandLogHistory((prev: HandLogSnapshot[]) => {
@@ -4242,6 +4425,13 @@ return [snap, ...prev].slice(0, 30);
   if (multiplayerActive && !isHost) return;
 
   if (nextHandTimerRef.current) window.clearTimeout(nextHandTimerRef.current);
+
+  // For all-in situations, delay longer to allow for board animation + win animations
+  // Normal: 8s, All-in: 15s (1s + 1.5s + 2s + 3s board + 1s pause + time to see result)
+  const wasAllIn = allInCallThisHandRef.current ||
+                   (multiplayerActive && mpState && mpState.oppRevealed && mpState.street === 5);
+  const nextHandDelay = wasAllIn ? 15000 : 8000;
+
  nextHandTimerRef.current = window.setTimeout(() => {
   if (multiplayerActive && isHost && mpHost) {
     // Check one more time before starting
@@ -4261,7 +4451,7 @@ return [snap, ...prev].slice(0, 30);
   if (!multiplayerActive) {
     startNewHand();
   }
-}, 8000);
+}, nextHandDelay);
 
 
   return () => {
@@ -7266,7 +7456,18 @@ const oppPosLabel = viewingSnapshot
     ? viewingSnapshot.oppStartStack 
     : displayHandStartStacks[oppActualSeat];
 
-const displayedActionLog = viewingSnapshot ? viewingSnapshot.log : displayActionLog;
+// Filter action log to hide showdown results until river animation completes
+const baseActionLog = viewingSnapshot ? viewingSnapshot.log : displayActionLog;
+const displayedActionLog = (riverAnimationComplete || displayStreet < 5)
+  ? baseActionLog
+  : baseActionLog.filter(entry => {
+      // Hide showdown-related entries until animation completes
+      const text = entry.text.toLowerCase();
+      return !text.includes('shows ') &&
+             !text.includes('showdown') &&
+             !text.includes('mucked') &&
+             !text.includes('split pot');
+    });
 
 const displayedHistoryBoard = viewingSnapshot
   ? viewingSnapshot.endedBoard
@@ -7461,8 +7662,8 @@ const displayedHistoryBoard = viewingSnapshot
         <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'200\' height=\'200\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noise\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'4\' /%3E%3C/filter%3E%3Crect width=\'200\' height=\'200\' filter=\'url(%23noise)\' /%3E%3C/svg%3E")'}}/>
       )}
 
-     {/* Play Again UI - only show in multiplayer when game is over and opponent hasn't quit */}
-      {multiplayerActive && mpState?.gameOver && !opponentQuit && (
+     {/* Play Again UI - only show in multiplayer when game is over, opponent hasn't quit, and river animation completes */}
+      {multiplayerActive && mpState?.gameOver && !opponentQuit && (riverAnimationComplete || displayStreet < 5) && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50">
           {/* State 1: Neither player has requested - show Play Again button */}
           {!playAgainRequested && !opponentWantsPlayAgain && (
@@ -7560,8 +7761,8 @@ const displayedHistoryBoard = viewingSnapshot
         </div>
       )}
       
-      {/* Single player Play Again */}
-      {!multiplayerActive && gameOver && !playAgainRequested && (
+      {/* Single player Play Again - only show after river animation completes */}
+      {!multiplayerActive && gameOver && !playAgainRequested && (dealtCards.river || street < 5) && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50">
           <button
             onClick={() => {
@@ -7628,7 +7829,9 @@ const displayedHistoryBoard = viewingSnapshot
             <div>
               <h1 className="text-2xl min-[1536px]:max-[1650px]:text-xl font-bold text-white">HeadsUp</h1>
               <div className="text-sm min-[1536px]:max-[1650px]:text-xs text-white opacity-80 tabular-nums">
-                Pot: {formatBB(roundToHundredth(displayGame.pot + displayGame.bets.top + displayGame.bets.bottom))}{" "}
+                Pot: {formatBB(roundToHundredth(
+                  isAnimatingAllIn ? winAmount : (displayGame.pot + displayGame.bets.top + displayGame.bets.bottom)
+                ))}{" "}
                 BB <span className="opacity-60">·</span> {streetLabel}{" "}
                 <span className="opacity-60">·</span>{" "}
                 <span className="opacity-90">
@@ -7863,10 +8066,16 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
               ? renderActionText(`${cardStr(youC)} ${cardStr(youD)}`)
               : "No cards"
           )}
-          {viewingSnapshot?.heroBest5 && (
+          {viewingSnapshot?.heroBest5 && viewingSnapshot.endedStreet === 5 ? (
             <span className="ml-2 opacity-60">
               → {renderActionText(viewingSnapshot.heroBest5.map(cardStr).join(" "))}
             </span>
+          ) : (
+            heroBest5 && dealtCards.river && (
+              <span className="ml-2 opacity-60">
+                → {renderActionText(heroBest5.map(cardStr).join(" "))}
+              </span>
+            )
           )}
         </div>
 
@@ -7881,39 +8090,77 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
               ? "Folded"
               : "Mucked"
           ) : (
-            // Current hand display
-            displayHandResult.status === "ended" && (
-              // Showdown: check if opponent was required to show
-              (displayHandResult.reason === "showdown" && (
-                mySeat === "bottom" 
-                  ? displayOppRevealed
-                  : !displayYouMucked
-              ))
-              // OR opponent clicked Show Hand button
-              || didOppShow
-            ) && oppA && oppB
-              ? renderActionText(`${cardStr(oppA)} ${cardStr(oppB)}`)
-              : displayActionLog.some((it) => it.seat === oppActualSeat && /fold/i.test(it.text))
-              ? "Folded"
-              : "Mucked"
+            // Current hand display - wait for river animation before showing mucked/folded
+            displayHandResult.status === "ended" && (riverAnimationComplete || displayStreet < 5)
+              ? (
+                  // Show cards if conditions met
+                  (displayHandResult.reason === "showdown" && (
+                    mySeat === "bottom"
+                      ? displayOppRevealed
+                      : !displayYouMucked
+                  )) || didOppShow
+                ) && oppA && oppB
+                  ? renderActionText(`${cardStr(oppA)} ${cardStr(oppB)}`)
+                  : displayActionLog.some((it) => it.seat === oppActualSeat && /fold/i.test(it.text))
+                  ? "Folded"
+                  : "Mucked"
+              : "" // Wait for animation to complete before showing status
           )}
-          {viewingSnapshot?.oppShown && viewingSnapshot.oppBest5 && (
+          {viewingSnapshot?.oppShown && viewingSnapshot.oppBest5 && viewingSnapshot.endedStreet === 5 ? (
             <span className="ml-2 opacity-60">
               → {renderActionText(viewingSnapshot.oppBest5.map(cardStr).join(" "))}
             </span>
+          ) : (
+            oppBest5 && dealtCards.river && (riverAnimationComplete || displayStreet < 5) && (displayHandResult.status === "ended" && (
+              (displayHandResult.reason === "showdown" && (
+                myActualSeat === "bottom"
+                  ? displayOppRevealed
+                  : !displayYouMucked
+              ))
+              || didOppShow
+            )) && (
+              <span className="ml-2 opacity-60">
+                → {renderActionText(oppBest5.map(cardStr).join(" "))}
+              </span>
+            )
           )}
         </div>
       </div>
     
-    {viewingSnapshot?.heroHandDesc && (
-      <div className="text-xs text-white/60 pl-1">
-        You: {viewingSnapshot.heroHandDesc}
-      </div>
-    )}
-    {viewingSnapshot?.oppShown && viewingSnapshot.oppHandDesc && (
-      <div className="text-xs text-white/60 pl-1">
-        Opponent: {viewingSnapshot.oppHandDesc}
-      </div>
+    {/* Hand ranks display - updates dynamically as board runs out */}
+    {viewingSnapshot ? (
+      <>
+        {viewingSnapshot.heroHandRank && viewingSnapshot.endedStreet === 5 && (
+          <div className="text-xs text-white/60 pl-1">
+            You: {viewingSnapshot.heroHandRank}
+          </div>
+        )}
+        {viewingSnapshot.oppShown && viewingSnapshot.oppHandRank && viewingSnapshot.endedStreet === 5 && (
+          <div className="text-xs text-white/60 pl-1">
+            Opponent: {viewingSnapshot.oppHandRank}
+          </div>
+        )}
+      </>
+    ) : (
+      <>
+        {heroHandRank && (
+          <div className="text-xs text-white/60 pl-1">
+            You: {heroHandRank}
+          </div>
+        )}
+        {oppHandRank && (riverAnimationComplete || displayStreet < 5) && (displayHandResult.status === "ended" && (
+          (displayHandResult.reason === "showdown" && (
+            myActualSeat === "bottom"
+              ? displayOppRevealed
+              : !displayYouMucked
+          ))
+          || didOppShow
+        )) && (
+          <div className="text-xs text-white/60 pl-1">
+            Opponent: {oppHandRank}
+          </div>
+        )}
+      </>
     )}
   </div>
 
@@ -7925,7 +8172,8 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
           </div>
         ))
       ) : (
-        board.slice(0, displayStreet).map((c, i) => (
+        // Only show board cards after river animation completes (or if hand ended before river)
+        (riverAnimationComplete || displayStreet < 5) && board.slice(0, displayStreet).map((c, i) => (
           <div key={i} className="scale-[0.75] origin-left shrink-0">
             <CardTile card={c} />
           </div>
@@ -7974,7 +8222,7 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
             {/* CENTER: TABLE */}
             <div className="mx-auto flex w-fit flex-col items-center gap-[60px] min-[1536px]:max-[1650px]:gap-[0px] min-[1651px]:gap-[60px] scale-[0.65] md:scale-[0.75] lg:scale-[0.85] xl:scale-100 origin-center">
               {/* TOP SEAT (Opponent) */}
-              <div className="relative h-[260px] w-[216px] min-[1536px]:max-[1650px]:h-[200px] min-[1536px]:max-[1650px]:w-[170px] -translate-y-6 min-[1536px]:max-[1650px]:-translate-y-15 rounded-3xl border border-white/20 bg-black/50 text-center">
+              <div className={`animate-seat-appear relative h-[260px] w-[216px] min-[1536px]:max-[1650px]:h-[200px] min-[1536px]:max-[1650px]:w-[170px] -translate-y-6 min-[1536px]:max-[1650px]:-translate-y-15 rounded-3xl border border-white/20 bg-black/50 text-center ${showWinAnimation === 'opponent' && (riverAnimationComplete || displayStreet < 5) ? ((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver) ? 'permanent-win-glow' : 'animate-win-glow') : ''}`}>
                 {!amIDealer && <div className={dealerChipTop}>D</div>}
 
                 <div className="absolute -bottom-14 min-[1536px]:max-[1650px]:-bottom-10 left-1/2 -translate-x-1/2">
@@ -7983,20 +8231,25 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
 
                 <div className="flex h-full flex-col justify-center">
                   <div className="-mt-3 min-[1536px]:max-[1650px]:-mt-2 text-sm min-[1536px]:max-[1650px]:text-xs uppercase text-white opacity-60">{opponentName || "Opponent"}</div>
-                  <div className="mt-2 min-[1536px]:max-[1650px]:mt-1 text-sm min-[1536px]:max-[1650px]:text-xs text-white">
-                    Stack:{" "}
-                    <span className="font-semibold tabular-nums">{formatBB(oppStack)}bb</span>
+                  <div className="mt-2 min-[1536px]:max-[1650px]:mt-1 text-sm min-[1536px]:max-[1650px]:text-xs text-white flex items-center justify-center gap-2">
+                    <span>Stack:{" "}</span>
+                    <span className={`font-semibold tabular-nums transition-all duration-300 ${showWinAnimation === 'opponent' && (riverAnimationComplete || displayStreet < 5) ? ((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver) ? 'permanent-stack-win' : 'animate-stack-win') : ''}`}>{formatBB(oppStack)}bb</span>
+                    {showWinAnimation === 'opponent' && winAmount > 0 && (riverAnimationComplete || displayStreet < 5) && (
+                      <span className="animate-win-amount font-bold text-green-500">
+                        +{formatBB(winAmount)}bb
+                      </span>
+                    )}
                   </div>
 
                   <div className="mt-4 min-[1536px]:max-[1650px]:mt-2 flex justify-center gap-3 min-[1536px]:max-[1650px]:gap-2">
                     {oppA && oppB ? (
                       // When viewing history, use snapshot's oppShown; otherwise use live state
-                      (viewingSnapshot 
-                        ? viewingSnapshot.oppShown 
-                        : (displayHandResult.status === "ended" && (
+                      (viewingSnapshot
+                        ? viewingSnapshot.oppShown
+                        : ((riverAnimationComplete || displayStreet < 5) && displayHandResult.status === "ended" && (
                             // Showdown: check if opponent was required to show
                             (displayHandResult.reason === "showdown" && (
-                              mySeat === "bottom" 
+                              mySeat === "bottom"
                                 ? displayOppRevealed
                                 : !displayYouMucked
                             ))
@@ -8005,19 +8258,19 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
                           ))
                       ) ? (
   <>
-    <div className={`${dealtCards[amIDealer ? 'bbCard1' : 'sbCard1'] ? 'animate-deal-to-top' : 'opacity-0'} ${flippedCards.oppCard1 ? 'animate-flip-card' : ''}`}>
+    <div className={`${dealtCards[amIDealer ? 'bbCard1' : 'sbCard1'] ? 'animate-deal-to-top' : (cardsVisible[amIDealer ? 'bbCard1' : 'sbCard1'] ? '' : 'opacity-0')} ${flippedCards.oppCard1 ? 'animate-flip-card' : ''}`}>
       <CardTile card={oppA} />
     </div>
-    <div className={`${dealtCards[amIDealer ? 'bbCard2' : 'sbCard2'] ? 'animate-deal-to-top' : 'opacity-0'} ${flippedCards.oppCard2 ? 'animate-flip-card' : ''}`}>
+    <div className={`${dealtCards[amIDealer ? 'bbCard2' : 'sbCard2'] ? 'animate-deal-to-top' : (cardsVisible[amIDealer ? 'bbCard2' : 'sbCard2'] ? '' : 'opacity-0')} ${flippedCards.oppCard2 ? 'animate-flip-card' : ''}`}>
       <CardTile card={oppB} />
     </div>
   </>
 ) : (
   <>
-    <div className={dealtCards[amIDealer ? 'bbCard1' : 'sbCard1'] ? 'animate-deal-to-top' : 'opacity-0'}>
+    <div className={dealtCards[amIDealer ? 'bbCard1' : 'sbCard1'] ? 'animate-deal-to-top' : (cardsVisible[amIDealer ? 'bbCard1' : 'sbCard1'] ? '' : 'opacity-0')}>
       <CardBack />
     </div>
-    <div className={dealtCards[amIDealer ? 'bbCard2' : 'sbCard2'] ? 'animate-deal-to-top' : 'opacity-0'}>
+    <div className={dealtCards[amIDealer ? 'bbCard2' : 'sbCard2'] ? 'animate-deal-to-top' : (cardsVisible[amIDealer ? 'bbCard2' : 'sbCard2'] ? '' : 'opacity-0')}>
       <CardBack />
     </div>
   </>
@@ -8025,6 +8278,23 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
 
                     ) : null}
                   </div>
+
+                  {/* Opponent hand rank - show when cards are visible */}
+                  {oppHandRank && (viewingSnapshot
+                    ? viewingSnapshot.oppShown
+                    : ((riverAnimationComplete || displayStreet < 5) && displayHandResult.status === "ended" && (
+                        (displayHandResult.reason === "showdown" && (
+                          mySeat === "bottom"
+                            ? displayOppRevealed
+                            : !displayYouMucked
+                        ))
+                        || didOppShow
+                      ))
+                  ) && (
+                    <div className="text-xs font-semibold text-white/80 mt-2">
+                      {oppHandRank}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -8045,7 +8315,7 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
 </div>
 
               {/* BOTTOM SEAT (You) */}
-              <div className="relative h-[260px] w-[216px] min-[1536px]:max-[1650px]:h-[200px] min-[1536px]:max-[1650px]:w-[170px] -translate-y-6 min-[1536px]:max-[1650px]:-translate-y-3 rounded-3xl border border-white/20 bg-black/50 text-center">
+              <div className={`animate-seat-appear relative h-[260px] w-[216px] min-[1536px]:max-[1650px]:h-[200px] min-[1536px]:max-[1650px]:w-[170px] -translate-y-6 min-[1536px]:max-[1650px]:-translate-y-3 rounded-3xl border border-white/20 bg-black/50 text-center ${showWinAnimation === 'hero' && (riverAnimationComplete || displayStreet < 5) ? ((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver) ? 'permanent-win-glow' : 'animate-win-glow') : ''}`}>
                 {amIDealer && <div className={dealerChipBottom}>D</div>}
 
                 <div className="absolute -top-14 min-[1536px]:max-[1650px]:-top-10 left-1/2 -translate-x-1/2">
@@ -8056,11 +8326,16 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
                   <div className="text-sm min-[1536px]:max-[1650px]:text-xs uppercase text-white opacity-60">You</div>
                   <div className="text-xl min-[1536px]:max-[1650px]:text-base font-semibold capitalize text-white">{studentProfile.firstName || "Guest"}</div>
 
-                  <div className="mt-2 min-[1536px]:max-[1650px]:mt-1 text-sm min-[1536px]:max-[1650px]:text-xs text-white">
-                    Stack:{" "}
-                    <span className="font-semibold tabular-nums">
+                  <div className="mt-2 min-[1536px]:max-[1650px]:mt-1 text-sm min-[1536px]:max-[1650px]:text-xs text-white flex items-center justify-center gap-2">
+                    <span>Stack:{" "}</span>
+                    <span className={`font-semibold tabular-nums transition-all duration-300 ${showWinAnimation === 'hero' && (riverAnimationComplete || displayStreet < 5) ? ((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver) ? 'permanent-stack-win' : 'animate-stack-win') : ''}`}>
                       {formatBB(myStack)}bb
                     </span>
+                    {showWinAnimation === 'hero' && winAmount > 0 && (riverAnimationComplete || displayStreet < 5) && (
+                      <span className="animate-win-amount font-bold text-green-500">
+                        +{formatBB(winAmount)}bb
+                      </span>
+                    )}
                   </div>
 
                   <div className="mt-4 min-[1536px]:max-[1650px]:mt-2 flex flex-col items-center gap-2 min-[1536px]:max-[1650px]:gap-1">
@@ -8081,10 +8356,10 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
                     </>
                   ) : (
                     <>
-                      <div className={`${dealtCards[amIDealer ? 'sbCard1' : 'bbCard1'] ? 'animate-deal-to-bottom' : 'opacity-0'} ${flippedCards.myCard1 ? 'animate-flip-card' : ''}`}>
+                      <div className={`${dealtCards[amIDealer ? 'sbCard1' : 'bbCard1'] ? 'animate-deal-to-bottom' : (cardsVisible[amIDealer ? 'sbCard1' : 'bbCard1'] ? '' : 'opacity-0')} ${flippedCards.myCard1 ? 'animate-flip-card' : ''}`}>
                         <CardTile card={youC} />
                       </div>
-                      <div className={`${dealtCards[amIDealer ? 'sbCard2' : 'bbCard2'] ? 'animate-deal-to-bottom' : 'opacity-0'} ${flippedCards.myCard2 ? 'animate-flip-card' : ''}`}>
+                      <div className={`${dealtCards[amIDealer ? 'sbCard2' : 'bbCard2'] ? 'animate-deal-to-bottom' : (cardsVisible[amIDealer ? 'sbCard2' : 'bbCard2'] ? '' : 'opacity-0')} ${flippedCards.myCard2 ? 'animate-flip-card' : ''}`}>
                         <CardTile card={youD} />
                       </div>
                     </>
@@ -8175,7 +8450,7 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
       dispatchAction({ type: "FOLD" });
     }
   }}
-  disabled={!(displayToAct === mySeat && displayHandResult.status === "playing")}
+  disabled={!(displayToAct === mySeat && displayHandResult.status === "playing") || actionInProgress}
   className="h-[64px] w-[100px] min-[1536px]:max-[1650px]:h-[50px] min-[1536px]:max-[1650px]:w-[78px] rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border bg-white px-4 py-3 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-2 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm transition-all duration-300 hover:bg-gray-100 hover:scale-[1.02] hover:shadow-[0_10px_30px_rgba(0,0,0,0.1)] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
 >
   Fold
@@ -8183,10 +8458,10 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
 
                <button
   type="button"
-  onClick={() =>
-  dispatchAction(facingBetBottom ? { type: "CALL" } : { type: "CHECK" })
-}
-  disabled={!(displayToAct === mySeat && displayHandResult.status === "playing")}
+  onClick={() => {
+    dispatchAction(facingBetBottom ? { type: "CALL" } : { type: "CHECK" });
+  }}
+  disabled={!(displayToAct === mySeat && displayHandResult.status === "playing") || actionInProgress}
   className="flex h-[64px] w-[100px] min-[1536px]:max-[1650px]:h-[50px] min-[1536px]:max-[1650px]:w-[78px] flex-col items-center justify-center rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border bg-white px-4 py-3 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-2 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm transition-all duration-300 hover:bg-gray-100 hover:scale-[1.02] hover:shadow-[0_10px_30px_rgba(0,0,0,0.1)] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
 >
   <div>{facingBetBottom ? "Call" : "Check"}</div>
@@ -8205,7 +8480,7 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
     const finalSize = betSize === "" || betSize < bottomMinRaise ? openingDefault : Math.max(betSize, bottomMinRaise);
     dispatchAction({ type: "BET_RAISE_TO", to: finalSize });
   }}
-  disabled={!(displayToAct === mySeat && displayHandResult.status === "playing")}
+  disabled={!(displayToAct === mySeat && displayHandResult.status === "playing") || actionInProgress}
   className="flex h-[64px] w-[100px] min-[1536px]:max-[1650px]:h-[50px] min-[1536px]:max-[1650px]:w-[78px] flex-col items-center justify-center rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border bg-white px-4 py-3 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-2 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm transition-all duration-300 hover:bg-gray-100 hover:scale-[1.02] hover:shadow-[0_10px_30px_rgba(0,0,0,0.1)] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
 >
   <div className="text-sm min-[1536px]:max-[1650px]:text-xs leading-tight">
