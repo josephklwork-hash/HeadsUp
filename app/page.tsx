@@ -801,11 +801,11 @@ const SUIT_COLOR: Record<string, string> = {
 function CardTile({ card }: { card: Card }) {
   const colorClass = SUIT_COLOR[card.suit];
   return (
-    <div className="relative h-24 w-16 min-[1536px]:max-[1650px]:h-[75px] min-[1536px]:max-[1650px]:w-[50px] rounded-xl border bg-white shadow-sm">
-      <div className={`absolute left-3 top-2 min-[1536px]:max-[1650px]:left-2 min-[1536px]:max-[1650px]:top-1 text-4xl min-[1536px]:max-[1650px]:text-3xl font-extrabold ${colorClass}`}>
+    <div className="relative h-24 w-16 rounded-xl border bg-white shadow-sm">
+      <div className={`absolute left-3 top-2 text-4xl font-extrabold ${colorClass}`}>
   {card.rank}
 </div>
-      <div className={`absolute bottom-3 right-3 min-[1536px]:max-[1650px]:bottom-2 min-[1536px]:max-[1650px]:right-2 text-4xl min-[1536px]:max-[1650px]:text-3xl font-bold ${colorClass}`}>
+      <div className={`absolute bottom-3 right-3 text-4xl font-bold ${colorClass}`}>
   {card.suit}
 </div>
     </div>
@@ -846,8 +846,8 @@ textShadow: `
 
 function CardBack() {
   return (
-    <div className="relative h-24 w-16 min-[1536px]:max-[1650px]:h-[75px] min-[1536px]:max-[1650px]:w-[50px] rounded-xl border bg-white shadow-sm">
-      <div className="absolute inset-2 min-[1536px]:max-[1650px]:inset-1 rounded-lg border border-dashed opacity-40" />
+    <div className="relative h-24 w-16 rounded-xl border bg-white shadow-sm">
+      <div className="absolute inset-2 rounded-lg border border-dashed opacity-40" />
     </div>
   );
 }
@@ -855,11 +855,11 @@ function CardBack() {
 function BetChip({ amount, label }: { amount: number; label?: string }) {
   if (amount <= 0) return null;
   return (
-    <div className="flex h-9 w-9 min-[1536px]:max-[1650px]:h-7 min-[1536px]:max-[1650px]:w-7 flex-col items-center justify-center rounded-full border bg-white text-black shadow-sm">
-      <div className="text-[11px] min-[1536px]:max-[1650px]:text-[9px] font-bold leading-none tabular-nums">
+    <div className="flex h-9 w-9 flex-col items-center justify-center rounded-full border bg-white text-black shadow-sm">
+      <div className="text-[11px] font-bold leading-none tabular-nums">
         {formatBB(amount)}
       </div>
-      <div className="mt-[1px] text-[9px] min-[1536px]:max-[1650px]:text-[7px] font-semibold leading-none opacity-70">
+      <div className="mt-[1px] text-[9px] font-semibold leading-none opacity-70">
         BB
       </div>
     </div>
@@ -1304,6 +1304,26 @@ const [flippedCards, setFlippedCards] = useState<{
 // Win animation state
 const [showWinAnimation, setShowWinAnimation] = useState<'hero' | 'opponent' | null>(null);
 const [winAmount, setWinAmount] = useState<number>(0);
+
+// Betting animations
+const [chipsToPot, setChipsToPot] = useState<{ id: string; from: 'hero' | 'opponent'; amount: number }[]>([]);
+const [actionFlashes, setActionFlashes] = useState<{ id: string; seat: 'hero' | 'opponent'; text: string }[]>([]);
+const [potToWinner, setPotToWinner] = useState<{ id: string; target: 'hero' | 'opponent'; amount: number } | null>(null);
+const prevActionLogLenRef = useRef(0);
+
+// Dynamic table zoom — fits game to any screen size
+const [tableScale, setTableScale] = useState(1);
+useEffect(() => {
+  function updateScale() {
+    const ratio = window.innerWidth / 1440;
+    // Square root curve: shrinks gently at small sizes instead of linearly
+    const scale = Math.sqrt(ratio);
+    setTableScale(Math.max(Math.min(scale, 1), 0.5));
+  }
+  updateScale();
+  window.addEventListener('resize', updateScale);
+  return () => window.removeEventListener('resize', updateScale);
+}, []);
 
 // Track which cards are visible (after dealing animation completes)
 const [cardsVisible, setCardsVisible] = useState<{
@@ -2116,6 +2136,10 @@ useEffect(() => {
 
     if (event === 'SIGNED_IN' && session?.user) {
       const user = session.user;
+
+      // Skip profile redirect for anonymous users (e.g. game creation)
+      if (user.is_anonymous) return;
+
       try {
         const { data: profile } = await supabase
           .from('profiles')
@@ -2702,6 +2726,59 @@ const displayBottomShowed = multiplayerActive && mpState ? mpState.bottomShowed 
     }
   }, [displayHandResult.status, displayHandResult.winner, displayHandResult.potWon, displayHandResult.message, myActualSeat, dealtCards.river, displayStreet, multiplayerActive, mpState?.gameOver, gameOver]);
 
+  // Chip-to-pot and action flash animations triggered by new action log entries
+  useEffect(() => {
+    const log = displayActionLog;
+    if (log.length <= prevActionLogLenRef.current) {
+      prevActionLogLenRef.current = log.length;
+      return;
+    }
+
+    // Only process newly added entries
+    const newEntries = log.slice(prevActionLogLenRef.current);
+    prevActionLogLenRef.current = log.length;
+
+    for (const entry of newEntries) {
+      const text = entry.text.toLowerCase();
+
+      // Skip blind posts, wins, shows, splits — no animation for those
+      if (/^(posts|wins|shows|split)/.test(text)) continue;
+
+      const seatIsHero = entry.seat === myActualSeat;
+      const animSeat: 'hero' | 'opponent' = seatIsHero ? 'hero' : 'opponent';
+
+      // Action flash for all actions (fold, check, call, bet, raise)
+      const displayText = entry.text.replace(/\s*\(.*?\)$/, '');
+      setActionFlashes(prev => [...prev, { id: entry.id, seat: animSeat, text: displayText }]);
+      setTimeout(() => {
+        setActionFlashes(prev => prev.filter(f => f.id !== entry.id));
+      }, 2300);
+
+      // Chip-to-pot only for bet/call/raise actions
+      if (/^(calls|bets|raises)/.test(text)) {
+        const amountMatch = entry.text.match(/([\d.]+)\s*bb/i);
+        const amount = amountMatch ? parseFloat(amountMatch[1]) : 0;
+
+        setChipsToPot(prev => [...prev, { id: entry.id, from: animSeat, amount }]);
+        setTimeout(() => {
+          setChipsToPot(prev => prev.filter(c => c.id !== entry.id));
+        }, 550);
+      }
+    }
+  }, [displayActionLog.length, myActualSeat]);
+
+  // Pot-to-winner animation — fires when hand ends (non-all-in) or when river animation completes (all-in)
+  useEffect(() => {
+    if (showWinAnimation && (riverAnimationComplete || displayStreet < 5) && displayHandResult.status === "ended" && displayHandResult.potWon > 0) {
+      setPotToWinner({
+        id: `pot-win-${Date.now()}`,
+        target: showWinAnimation,
+        amount: displayHandResult.potWon,
+      });
+      setTimeout(() => setPotToWinner(null), 700);
+    }
+  }, [showWinAnimation, riverAnimationComplete, displayStreet, displayHandResult.status, displayHandResult.potWon]);
+
   // Refs to track previous show states
   const prevOppShowRef = useRef(false);
   const prevMyShowRef = useRef(false);
@@ -2777,17 +2854,18 @@ const oppBet = displayGame.bets[oppActualSeat];
 async function createPinGame() {
   let user: User;
 
-  // Try to use existing session first (much faster)
   try {
-    const { data: existingData } = await supabase.auth.getUser();
-    
-    if (existingData?.user) {
-      user = existingData.user;
+    // Try local session first (instant)
+    const { data: sessionData } = await supabase.auth.getSession();
+
+    if (sessionData?.session?.user) {
+      user = sessionData.session.user;
     } else {
-      // Only create anonymous user if needed
+      // No valid session — sign out to clear stale tokens, then create fresh anonymous user
+      await supabase.auth.signOut().catch(() => {});
       const { data: anonData, error: anonErr } =
         await supabase.auth.signInAnonymously();
-      
+
       if (anonErr || !anonData.user) throw anonErr;
       user = anonData.user;
     }
@@ -2890,91 +2968,92 @@ async function joinPinGame() {
   const pin = joinPinInput.trim();
   if (pin.length !== 4) return;
   if (creatingGame) return;
-  
+
   setCreatingGame(true);
-  
-  let user: User;
+
   try {
-    // Try to use existing session first (preserve logged-in state)
-    const { data: existingData } = await supabase.auth.getUser();
-    
-    if (existingData?.user) {
-      user = existingData.user;
-    } else {
-      // Only create anonymous user if not logged in
-      const { data: anonData, error: anonErr } = await supabase.auth.signInAnonymously();
-      if (anonErr || !anonData.user) throw anonErr;
-      user = anonData.user;
+    let user: User;
+    try {
+      // Try local session first (instant)
+      const { data: sessionData } = await supabase.auth.getSession();
+
+      if (sessionData?.session?.user) {
+        user = sessionData.session.user;
+      } else {
+        // No valid session — sign out to clear stale tokens, then create fresh anonymous user
+        await supabase.auth.signOut().catch(() => {});
+        const { data: anonData, error: anonErr } = await supabase.auth.signInAnonymously();
+        if (anonErr || !anonData.user) throw anonErr;
+        user = anonData.user;
+      }
+    } catch (e) {
+      alert("Could not connect. Check your internet.");
+      return;
     }
-  } catch (e) {
-    alert("Could not connect. Check your internet.");
-    setCreatingGame(false);
-    return;
-  }
 
-  const { data: gameRow, error: gameErr } = await supabase
-    .from("games")
-    .select("id,pin,status")
-    .eq("pin", pin)
-    .single();
+    const { data: gameRow, error: gameErr } = await supabase
+      .from("games")
+      .select("id,pin,status")
+      .eq("pin", pin)
+      .single();
 
-  if (gameErr || !gameRow) {
-    alert('Invalid PIN.');
-    setCreatingGame(false);
-    return;
-  }
-  
-  const { error: playerErr } = await supabase.from("game_players").insert({
-    game_id: gameRow.id,
-    user_id: user.id,
-    seat: "top",
-  });
-
-  if (playerErr) {
-    alert("Could not join. Seat may be taken.");
-    setCreatingGame(false);
-    return;
-  }
-  
- await supabase.from("games").update({ status: "active" }).eq("id", gameRow.id);
-
-  // Broadcast to host that joiner has joined
-  const tempChannel = supabase.channel(`game:${gameRow.id}`);
-  tempChannel.subscribe((status) => {
-    if (status === 'SUBSCRIBED') {
-      const notifyHost = () => {
-        tempChannel.send({
-          type: "broadcast",
-          event: "mp",
-          payload: {
-            event: "JOINER_READY",
-            sender: user.id,
-          },
-        });
-      };
-      notifyHost();
-      setTimeout(notifyHost, 300);
-      setTimeout(notifyHost, 600);
-      setTimeout(notifyHost, 1000);
+    if (gameErr || !gameRow) {
+      alert('Invalid PIN.');
+      return;
     }
-  });
 
-  setJoinMode(false);
-  setJoinPinInput("");
-  setGamePin(gameRow.pin);
-  setGameId(gameRow.id);
-  setMySeat("top");
-  setMultiplayerActive(true);
+    const { error: playerErr } = await supabase.from("game_players").insert({
+      game_id: gameRow.id,
+      user_id: user.id,
+      seat: "top",
+    });
 
-  sessionStorage.setItem('headsup_gameId', gameRow.id);
-  sessionStorage.setItem('headsup_mySeat', 'top');
-  sessionStorage.setItem('headsup_gamePin', gameRow.pin);
+    if (playerErr) {
+      alert("Could not join. Seat may be taken.");
+      return;
+    }
 
-  clearTimers();
-  setBetSize(2);
-  setSeatedRole((prev) => prev ?? "student");
-  setScreen("game");
-  setCreatingGame(false);
+    await supabase.from("games").update({ status: "active" }).eq("id", gameRow.id);
+
+    // Broadcast to host that joiner has joined
+    const tempChannel = supabase.channel(`game:${gameRow.id}`);
+    tempChannel.subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        const notifyHost = () => {
+          tempChannel.send({
+            type: "broadcast",
+            event: "mp",
+            payload: {
+              event: "JOINER_READY",
+              sender: user.id,
+            },
+          });
+        };
+        notifyHost();
+        setTimeout(notifyHost, 300);
+        setTimeout(notifyHost, 600);
+        setTimeout(notifyHost, 1000);
+      }
+    });
+
+    setJoinMode(false);
+    setJoinPinInput("");
+    setGamePin(gameRow.pin);
+    setGameId(gameRow.id);
+    setMySeat("top");
+    setMultiplayerActive(true);
+
+    sessionStorage.setItem('headsup_gameId', gameRow.id);
+    sessionStorage.setItem('headsup_mySeat', 'top');
+    sessionStorage.setItem('headsup_gamePin', gameRow.pin);
+
+    clearTimers();
+    setBetSize(2);
+    setSeatedRole((prev) => prev ?? "student");
+    setScreen("game");
+  } finally {
+    setCreatingGame(false);
+  }
 }
 
 function clearPin() {
@@ -3292,6 +3371,12 @@ setToAct(firstToAct);
 
     setSawCallThisStreet(false);
 
+    // Clear betting animations
+    setChipsToPot([]);
+    setActionFlashes([]);
+    setPotToWinner(null);
+    prevActionLogLenRef.current = 0;
+
     setHandId((h) => {
       const next = h + 1;
 
@@ -3352,6 +3437,12 @@ setCards(nextCards);
     setBetSize(2);
     setHandLogHistory([]);
     setLogViewOffset(0);
+
+    // Clear betting animations
+    setChipsToPot([]);
+    setActionFlashes([]);
+    setPotToWinner(null);
+    prevActionLogLenRef.current = 0;
 
     setGameSession((s: number) => {
   const next = s + 1;
@@ -5013,23 +5104,39 @@ const joinGame = () => {
     </div>
 
     {!gamePin && (
-  <button
-    type="button"
-    onClick={() =>
-      setScreen(
-        seatedRole === "professional"
-          ? "professionalDashboard"
-          : "dashboard"
-      )
-    }
-    className={`text-sm min-[1536px]:max-[1650px]:text-xs font-semibold ${
-      selectedTheme === "notebook"
-        ? "font-caveat text-lg text-gray-800 hover:text-[#2563eb] no-underline"
-        : "text-white underline opacity-80 hover:opacity-100"
-    }`}
-  >
-    Dashboard
-  </button>
+  <>
+    <button
+      type="button"
+      onClick={() =>
+        setScreen(
+          seatedRole === "professional"
+            ? "professionalDashboard"
+            : "dashboard"
+        )
+      }
+      className={`text-sm min-[1536px]:max-[1650px]:text-xs font-semibold ${
+        selectedTheme === "notebook"
+          ? "font-caveat text-lg text-gray-800 hover:text-[#2563eb] no-underline"
+          : "text-white underline opacity-80 hover:opacity-100"
+      }`}
+    >
+      Dashboard
+    </button>
+    <button
+      type="button"
+      onClick={() => {
+        setIsGuestBrowsing(true);
+        navigateTo("dashboard");
+      }}
+      className={`text-sm min-[1536px]:max-[1650px]:text-xs font-semibold ${
+        selectedTheme === "notebook"
+          ? "font-caveat text-lg text-gray-800 hover:text-[#dc2626] no-underline"
+          : "text-white underline opacity-80 hover:opacity-100"
+      }`}
+    >
+      Explore
+    </button>
+  </>
 )}
 
   </>
@@ -7960,9 +8067,9 @@ if (screen === "about") {
   if (screen !== "game" || !seatedRole) return null;
 
  const dealerChipTop =
-    "absolute -bottom-3 -right-3 min-[1536px]:max-[1650px]:-bottom-2 min-[1536px]:max-[1650px]:-right-3 flex h-10 w-10 min-[1536px]:max-[1650px]:h-8 min-[1536px]:max-[1650px]:w-8 items-center justify-center rounded-full border bg-white text-[20px] min-[1536px]:max-[1650px]:text-[16px] font-bold text-black shadow-sm";
+    "absolute -bottom-3 -right-3 flex h-10 w-10 items-center justify-center rounded-full border bg-white text-[20px] font-bold text-black shadow-sm";
   const dealerChipBottom =
-    "absolute -top-3 -left-3 min-[1536px]:max-[1650px]:-top-2 min-[1536px]:max-[1650px]:-left-3 flex h-10 w-10 min-[1536px]:max-[1650px]:h-8 min-[1536px]:max-[1650px]:w-8 items-center justify-center rounded-full border bg-white text-[20px] min-[1536px]:max-[1650px]:text-[16px] font-bold text-black shadow-sm";
+    "absolute -top-3 -left-3 flex h-10 w-10 items-center justify-center rounded-full border bg-white text-[20px] font-bold text-black shadow-sm";
 
   const streetLabel = streetNameFromCount(displayStreet);
 
@@ -8401,10 +8508,7 @@ const displayedHistoryBoard = viewingSnapshot
             <div>
               <h1 className="text-2xl min-[1536px]:max-[1650px]:text-xl font-bold text-white">HeadsUp</h1>
               <div className="text-sm min-[1536px]:max-[1650px]:text-xs text-white opacity-80 tabular-nums">
-                Pot: {formatBB(roundToHundredth(
-                  isAnimatingAllIn ? winAmount : (displayGame.pot + displayGame.bets.top + displayGame.bets.bottom)
-                ))}{" "}
-                BB <span className="opacity-60">·</span> {streetLabel}{" "}
+                {streetLabel}{" "}
                 <span className="opacity-60">·</span>{" "}
                 <span className="opacity-90">
   {opponentQuit
@@ -8792,18 +8896,32 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
 </div>
 
             {/* CENTER: TABLE */}
-            <div className="mx-auto flex w-fit flex-col items-center gap-[60px] min-[1536px]:max-[1650px]:gap-[0px] min-[1651px]:gap-[60px] scale-[0.65] md:scale-[0.75] lg:scale-[0.85] xl:scale-100 origin-center">
+            <div className="mx-auto flex w-fit flex-col items-center gap-[60px] origin-center" style={{ transform: `scale(${tableScale})` }}>
               {/* TOP SEAT (Opponent) */}
-              <div className={`animate-seat-appear relative h-[260px] w-[216px] min-[1536px]:max-[1650px]:h-[200px] min-[1536px]:max-[1650px]:w-[170px] -translate-y-6 min-[1536px]:max-[1650px]:-translate-y-15 rounded-3xl border border-white/20 bg-black/50 text-center ${showWinAnimation === 'opponent' && (riverAnimationComplete || displayStreet < 5) ? ((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver) ? 'permanent-win-glow' : 'animate-win-glow') : ''}`}>
+              <div className={`animate-seat-appear relative h-[260px] w-[216px] -translate-y-6 rounded-3xl border border-white/20 bg-black/50 text-center ${showWinAnimation === 'opponent' && (riverAnimationComplete || displayStreet < 5) ? ((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver) ? 'permanent-win-glow' : 'animate-win-glow') : displayToAct === oppActualSeat && displayHandResult.status === 'playing' ? 'turn-active' : ''}`}>
                 {!amIDealer && <div className={dealerChipTop}>D</div>}
 
-                <div className="absolute -bottom-14 min-[1536px]:max-[1650px]:-bottom-10 left-1/2 -translate-x-1/2">
+                <div className="absolute -bottom-14 left-1/2 -translate-x-1/2">
                   <BetChip amount={oppBet} label={oppLabel} />
+                  {chipsToPot.filter(c => c.from === 'opponent').map(c => (
+                    <div key={c.id} className="absolute inset-0 animate-chip-to-pot-opponent pointer-events-none">
+                      <BetChip amount={c.amount} />
+                    </div>
+                  ))}
                 </div>
 
+                {/* Action flash for opponent */}
+                {actionFlashes.filter(f => f.seat === 'opponent').map(f => (
+                  <div key={f.id} className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 pointer-events-none">
+                    <div className="animate-action-flash whitespace-nowrap rounded-lg bg-white/90 px-3 py-1 text-xs font-bold text-black shadow-lg">
+                      {f.text}
+                    </div>
+                  </div>
+                ))}
+
                 <div className="flex h-full flex-col justify-center">
-                  <div className="-mt-3 min-[1536px]:max-[1650px]:-mt-2 text-sm min-[1536px]:max-[1650px]:text-xs uppercase text-white opacity-60">{opponentName || "Opponent"}</div>
-                  <div className="mt-2 min-[1536px]:max-[1650px]:mt-1 text-sm min-[1536px]:max-[1650px]:text-xs text-white flex items-center justify-center gap-2">
+                  <div className="-mt-3 text-sm uppercase text-white opacity-60">{opponentName || "Opponent"}</div>
+                  <div className="mt-2 text-sm text-white flex items-center justify-center gap-2">
                     <span>Stack:{" "}</span>
                     <span className={`font-semibold tabular-nums transition-all duration-300 ${showWinAnimation === 'opponent' && (riverAnimationComplete || displayStreet < 5) ? ((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver) ? 'permanent-stack-win' : 'animate-stack-win') : ''}`}>{formatBB(oppStack)}bb</span>
                     {showWinAnimation === 'opponent' && winAmount > 0 && (riverAnimationComplete || displayStreet < 5) && (
@@ -8813,7 +8931,7 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
                     )}
                   </div>
 
-                  <div className="mt-4 min-[1536px]:max-[1650px]:mt-2 flex justify-center gap-3 min-[1536px]:max-[1650px]:gap-2">
+                  <div className="mt-4 flex justify-center gap-3">
                     {oppA && oppB ? (
                       // When viewing history, use snapshot's oppShown; otherwise use live state
                       (viewingSnapshot
@@ -8871,8 +8989,31 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
               </div>
 
               {/* BOARD (always current hand) */}
-<div className="relative flex h-40 items-center justify-center">
-  <div className="absolute flex gap-3 min-[1536px]:max-[1650px]:gap-2 top-[8px] min-[1536px]:max-[1650px]:top-[7px]">
+<div className="relative flex h-56 items-center justify-center">
+  {/* Pot display — centered above board cards */}
+  <div className="absolute top-0 left-1/2 -translate-x-1/2 z-10">
+    <div className="text-lg font-bold text-white tabular-nums tracking-wide whitespace-nowrap">
+      Pot: {formatBB(roundToHundredth(
+        isAnimatingAllIn ? winAmount : (displayGame.pot + displayGame.bets.top + displayGame.bets.bottom)
+      ))}bb
+    </div>
+  </div>
+  {/* Pot-to-winner flying chip */}
+  {potToWinner && (
+    <div className={`absolute top-0 left-1/2 -translate-x-1/2 z-20 pointer-events-none ${
+      potToWinner.target === 'hero' ? 'animate-pot-to-hero' : 'animate-pot-to-opponent'
+    }`}>
+      <div className="flex h-9 w-9 flex-col items-center justify-center rounded-full border bg-yellow-400 text-black shadow-lg">
+        <div className="text-[11px] font-bold leading-none tabular-nums">
+          {formatBB(potToWinner.amount)}
+        </div>
+        <div className="mt-[1px] text-[9px] font-semibold leading-none opacity-70">
+          BB
+        </div>
+      </div>
+    </div>
+  )}
+  <div className="absolute flex gap-3 top-[40px]">
     {board.slice(0, displayStreet).map((c, i) => {
       // Determine which animation to apply based on card index
       const cardKey = i === 0 ? 'flop1' : i === 1 ? 'flop2' : i === 2 ? 'flop3' : i === 3 ? 'turn' : 'river';
@@ -8887,18 +9028,32 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
 </div>
 
               {/* BOTTOM SEAT (You) */}
-              <div className={`animate-seat-appear relative h-[260px] w-[216px] min-[1536px]:max-[1650px]:h-[200px] min-[1536px]:max-[1650px]:w-[170px] -translate-y-6 min-[1536px]:max-[1650px]:-translate-y-3 rounded-3xl border border-white/20 bg-black/50 text-center ${showWinAnimation === 'hero' && (riverAnimationComplete || displayStreet < 5) ? ((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver) ? 'permanent-win-glow' : 'animate-win-glow') : ''}`}>
+              <div className={`animate-seat-appear relative h-[260px] w-[216px] -translate-y-6 rounded-3xl border border-white/20 bg-black/50 text-center ${showWinAnimation === 'hero' && (riverAnimationComplete || displayStreet < 5) ? ((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver) ? 'permanent-win-glow' : 'animate-win-glow') : displayToAct === mySeat && displayHandResult.status === 'playing' ? 'turn-active' : ''}`}>
                 {amIDealer && <div className={dealerChipBottom}>D</div>}
 
-                <div className="absolute -top-14 min-[1536px]:max-[1650px]:-top-10 left-1/2 -translate-x-1/2">
+                <div className="absolute -top-14 left-1/2 -translate-x-1/2">
                   <BetChip amount={myBet} label={myLabel} />
+                  {chipsToPot.filter(c => c.from === 'hero').map(c => (
+                    <div key={c.id} className="absolute inset-0 animate-chip-to-pot-hero pointer-events-none">
+                      <BetChip amount={c.amount} />
+                    </div>
+                  ))}
                 </div>
 
-                <div className="flex h-full flex-col justify-center">
-                  <div className="text-sm min-[1536px]:max-[1650px]:text-xs uppercase text-white opacity-60">You</div>
-                  <div className="text-xl min-[1536px]:max-[1650px]:text-base font-semibold capitalize text-white">{studentProfile.firstName || "Guest"}</div>
+                {/* Action flash for hero — overlays "You" label area */}
+                {actionFlashes.filter(f => f.seat === 'hero').map(f => (
+                  <div key={f.id} className="absolute top-2 left-1/2 -translate-x-1/2 z-20 pointer-events-none">
+                    <div className="animate-action-flash whitespace-nowrap rounded-lg bg-white/90 px-3 py-1 text-xs font-bold text-black shadow-lg">
+                      {f.text}
+                    </div>
+                  </div>
+                ))}
 
-                  <div className="mt-2 min-[1536px]:max-[1650px]:mt-1 text-sm min-[1536px]:max-[1650px]:text-xs text-white flex items-center justify-center gap-2">
+                <div className="flex h-full flex-col justify-center">
+                  <div className="-mt-1 text-sm uppercase text-white opacity-60">You</div>
+                  <div className="text-xl font-semibold capitalize text-white">{studentProfile.firstName || "Guest"}</div>
+
+                  <div className="mt-1 text-sm text-white flex items-center justify-center gap-2">
                     <span>Stack:{" "}</span>
                     <span className={`font-semibold tabular-nums transition-all duration-300 ${showWinAnimation === 'hero' && (riverAnimationComplete || displayStreet < 5) ? ((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver) ? 'permanent-stack-win' : 'animate-stack-win') : ''}`}>
                       {formatBB(myStack)}bb
@@ -8910,7 +9065,7 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
                     )}
                   </div>
 
-                  <div className="mt-4 min-[1536px]:max-[1650px]:mt-2 flex flex-col items-center gap-2 min-[1536px]:max-[1650px]:gap-1">
+                  <div className="mt-4 flex flex-col items-center gap-2">
                  <div className="flex justify-center gap-3">
                    {youC && youD ? (
                     // When viewing history, use snapshot's heroShown; otherwise use live state
@@ -8939,29 +9094,57 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
                 ) : null}
               </div>
 
-  {heroHandRank && !(handResult.status === "ended" && youMucked) ? (
-    <div className="text-xs font-semibold text-white/80">
-      {heroHandRank}
-    </div>
-  ) : null}
+  </div>
 </div>
 
-                </div>
+                {/* Hand rank — outside the border */}
+                {heroHandRank && !(handResult.status === "ended" && youMucked) ? (
+                  <div className="absolute -bottom-8 left-1/2 -translate-x-1/2 text-xs font-semibold text-white/80 whitespace-nowrap">
+                    {heroHandRank}
+                  </div>
+                ) : null}
               </div>
             </div>
           </div>
 
           {/* ACTION PANEL (bottom-right) */}
           {displayToAct === mySeat && displayHandResult.status === "playing" && (
-            <div className="fixed bottom-4 md:bottom-6 right-4 md:right-6 z-50 flex w-[280px] md:w-[320px] min-[1536px]:max-[1650px]:w-[258px] flex-col gap-2 md:gap-3">
+            <div className="fixed bottom-4 md:bottom-6 right-4 md:right-6 z-50 flex w-[280px] md:w-[320px] flex-col gap-2 md:gap-3 origin-bottom-right" style={{ transform: `scale(${tableScale})` }}>
               {displayGame.stacks[myActualSeat] > bottomCallAmt && displayGame.stacks[oppActualSeat] > 0 && bottomMaxTo > bottomMinRaise && (
-                <div className="rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border bg-white p-3 min-[1536px]:max-[1650px]:p-1.5 min-[1536px]:max-[1650px]:py-2.5 text-black shadow-sm min-[1536px]:max-[1650px]:ml-auto min-[1536px]:max-[1650px]:w-[258px]">
-                  <div className="mb-2 min-[1536px]:max-[1650px]:mb-1 flex items-center justify-between">
-                    <div className="text-sm min-[1536px]:max-[1650px]:text-xs min-[1536px]:max-[1650px]:ml-1 font-semibold">{facingBetBottom ? "Raise to" : "Bet to"}</div>
-                    <div className="text-sm min-[1536px]:max-[1650px]:text-xs min-[1536px]:max-[1650px]:mr-1 font-bold tabular-nums">{formatBB(displayBetSize)} BB</div>
+                <div className="rounded-2xl border bg-white p-3 text-black shadow-sm">
+                  <div className="mb-2 flex items-center justify-between">
+                    <div className="text-sm font-semibold">{facingBetBottom ? "Raise to" : "Bet to"}</div>
+                    <div className="text-sm font-bold tabular-nums">{formatBB(displayBetSize)} BB</div>
                   </div>
 
-                  <div className="flex items-center gap-3 min-w-0 min-[1536px]:max-[1650px]:justify-end">
+                  <div className="mb-2 flex gap-1.5">
+                    {[33, 50, 75].map(pct => {
+                      const currentPot = displayGame.pot + displayGame.bets.top + displayGame.bets.bottom;
+                      const target = facingBetBottom
+                        ? roundToHundredth(displayGame.bets[oppActualSeat] + (pct / 100) * (currentPot + bottomCallAmt))
+                        : roundToHundredth((pct / 100) * currentPot);
+                      const clamped = Math.min(Math.max(target, bottomMinRaise), bottomMaxTo);
+                      return (
+                        <button
+                          key={pct}
+                          type="button"
+                          onClick={() => setBetSizeRounded(clamped)}
+                          className="flex-1 rounded-lg border border-gray-200 py-1 text-xs font-semibold text-black transition-colors hover:bg-gray-100 active:bg-gray-200"
+                        >
+                          {pct}%
+                        </button>
+                      );
+                    })}
+                    <button
+                      type="button"
+                      onClick={() => setBetSizeRounded(bottomMaxTo)}
+                      className="flex-1 rounded-lg border border-gray-200 py-1 text-xs font-bold text-black transition-colors hover:bg-gray-100 active:bg-gray-200"
+                    >
+                      All In
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-3 min-w-0">
                     <input
                       type="range"
                       min={bottomMinRaise}
@@ -8969,7 +9152,7 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
                       step={0.01}
                       value={betSize === "" ? bottomMinRaise : Math.max(betSize, bottomMinRaise)}
                       onChange={(e) => setBetSizeRounded(Number(e.target.value))}
-                      className="w-full min-[1536px]:max-[1650px]:w-[160px]"
+                      className="w-full"
                     />
 
                     <input
@@ -9000,7 +9183,7 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
                           setBetSizeRounded(Math.min(betSize, bottomMaxTo));
                         }
                       }}
-                      className="w-24 min-[1536px]:max-[1650px]:w-19 rounded-xl min-[1536px]:max-[1650px]:rounded-lg border px-2 py-1 min-[1536px]:max-[1650px]:px-1.5 min-[1536px]:max-[1650px]:py-0.5 text-sm min-[1536px]:max-[1650px]:text-xs tabular-nums min-[1536px]:max-[1650px]:mr-2"
+                      className="w-24 rounded-xl border px-2 py-1 text-sm tabular-nums"
                     />
                   </div>
                 </div>
@@ -9023,7 +9206,7 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
     }
   }}
   disabled={!(displayToAct === mySeat && displayHandResult.status === "playing") || actionInProgress}
-  className="h-[64px] w-[100px] min-[1536px]:max-[1650px]:h-[50px] min-[1536px]:max-[1650px]:w-[78px] rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border bg-white px-4 py-3 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-2 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm transition-all duration-300 hover:bg-gray-100 hover:scale-[1.02] hover:shadow-[0_10px_30px_rgba(0,0,0,0.1)] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+  className="h-[64px] w-[100px] rounded-2xl border bg-white px-4 py-3 text-sm font-semibold text-black shadow-sm transition-all duration-300 hover:bg-gray-100 hover:scale-[1.02] hover:shadow-[0_10px_30px_rgba(0,0,0,0.1)] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
 >
   Fold
 </button>
@@ -9034,12 +9217,12 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
     dispatchAction(facingBetBottom ? { type: "CALL" } : { type: "CHECK" });
   }}
   disabled={!(displayToAct === mySeat && displayHandResult.status === "playing") || actionInProgress}
-  className="flex h-[64px] w-[100px] min-[1536px]:max-[1650px]:h-[50px] min-[1536px]:max-[1650px]:w-[78px] flex-col items-center justify-center rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border bg-white px-4 py-3 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-2 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm transition-all duration-300 hover:bg-gray-100 hover:scale-[1.02] hover:shadow-[0_10px_30px_rgba(0,0,0,0.1)] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+  className="flex h-[64px] w-[100px] flex-col items-center justify-center rounded-2xl border bg-white px-4 py-3 text-sm font-semibold text-black shadow-sm transition-all duration-300 hover:bg-gray-100 hover:scale-[1.02] hover:shadow-[0_10px_30px_rgba(0,0,0,0.1)] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
 >
   <div>{facingBetBottom ? "Call" : "Check"}</div>
 
   {facingBetBottom && (
-    <div className="mt-0.5 text-xs min-[1536px]:max-[1650px]:text-[10px] font-bold tabular-nums">
+    <div className="mt-0.5 text-xs font-bold tabular-nums">
       {formatBB(bottomCallAmt)} BB
     </div>
   )}
@@ -9053,13 +9236,13 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
     dispatchAction({ type: "BET_RAISE_TO", to: finalSize });
   }}
   disabled={!(displayToAct === mySeat && displayHandResult.status === "playing") || actionInProgress}
-  className="flex h-[64px] w-[100px] min-[1536px]:max-[1650px]:h-[50px] min-[1536px]:max-[1650px]:w-[78px] flex-col items-center justify-center rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border bg-white px-4 py-3 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-2 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm transition-all duration-300 hover:bg-gray-100 hover:scale-[1.02] hover:shadow-[0_10px_30px_rgba(0,0,0,0.1)] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+  className="flex h-[64px] w-[100px] flex-col items-center justify-center rounded-2xl border bg-white px-4 py-3 text-sm font-semibold text-black shadow-sm transition-all duration-300 hover:bg-gray-100 hover:scale-[1.02] hover:shadow-[0_10px_30px_rgba(0,0,0,0.1)] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
 >
-  <div className="text-sm min-[1536px]:max-[1650px]:text-xs leading-tight">
+  <div className="text-sm leading-tight">
     {facingBetBottom ? "Raise" : "Bet"}
   </div>
 
-  <div className="mt-0.5 w-full text-center text-xs min-[1536px]:max-[1650px]:text-[10px] font-bold tabular-nums">
+  <div className="mt-0.5 w-full text-center text-xs font-bold tabular-nums">
     {formatBB(displayBetSize)} BB
   </div>
 </button>
