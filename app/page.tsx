@@ -2074,6 +2074,8 @@ useEffect(() => {
         } else if (mounted && isOAuth) {
           // OAuth user with no profile yet — send to profile completion
           const oauthMeta = data.user.user_metadata || {};
+          const isLinkedIn = data.user.app_metadata?.provider === 'linkedin_oidc';
+          const linkedinSub = isLinkedIn ? (oauthMeta.sub || oauthMeta.provider_id || '') : '';
           setStudentProfile({
             firstName: oauthMeta.full_name?.split(' ')[0] || oauthMeta.given_name || '',
             lastName: oauthMeta.full_name?.split(' ').slice(1).join(' ') || oauthMeta.family_name || '',
@@ -2084,7 +2086,7 @@ useEffect(() => {
             school: '',
             company: '',
             workTitle: '',
-            linkedinUrl: '',
+            linkedinUrl: isLinkedIn && linkedinSub ? `https://linkedin.com/in/${linkedinSub}` : '',
           });
           setSeatedRole("student");
           setScreen('oauthProfileCompletion');
@@ -2128,6 +2130,8 @@ useEffect(() => {
         } else if (mounted) {
           // New OAuth user — pre-fill from provider metadata
           const oauthMeta = user.user_metadata || {};
+          const isLinkedIn = user.app_metadata?.provider === 'linkedin_oidc';
+          const linkedinSub = isLinkedIn ? (oauthMeta.sub || oauthMeta.provider_id || '') : '';
           setStudentProfile({
             firstName: oauthMeta.full_name?.split(' ')[0] || oauthMeta.given_name || '',
             lastName: oauthMeta.full_name?.split(' ').slice(1).join(' ') || oauthMeta.family_name || '',
@@ -2138,7 +2142,7 @@ useEffect(() => {
             school: '',
             company: '',
             workTitle: '',
-            linkedinUrl: '',
+            linkedinUrl: isLinkedIn && linkedinSub ? `https://linkedin.com/in/${linkedinSub}` : '',
           });
           setSeatedRole("student");
           setScreen('oauthProfileCompletion');
