@@ -7918,7 +7918,7 @@ if (screen === "about") {
           </p>
 
           <p>
-            This isn't a startup. It's a portfolio project while I explore roles in product management, risk management, and FP&A. I'm proud of what I've built and always working to make it better.
+            What started as a portfolio project has turned into something I genuinely want to grow. I'm exploring roles in product management, risk management, and FP&A, but I'm also open to seeing where HeadsUp can go. I'm proud of what I've built and always working to make it better.
           </p>
 
           <div className="mt-8 pt-6 border-t border-white/20">
