@@ -5370,6 +5370,14 @@ const joinGame = () => {
   )}
 </div>
       </div>
+
+      <div className={`absolute bottom-4 left-0 right-0 flex justify-center gap-4 z-10 ${
+        selectedTheme === "notebook" ? "font-caveat text-sm text-gray-400" : "text-xs text-white/30"
+      }`}>
+        <a href="/privacy" className="hover:underline">Privacy Policy</a>
+        <span>|</span>
+        <a href="/terms" className="hover:underline">Terms of Service</a>
+      </div>
     </main>
   );
 }
