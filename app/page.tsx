@@ -7744,6 +7744,58 @@ if (screen === "editProfile") {
           >
             Cancel
           </button>
+
+          <div className={`mt-8 pt-6 ${selectedTheme === "notebook" ? "border-t-2 border-red-300" : "border-t border-white/10"}`}>
+            <button
+              type="button"
+              onClick={async () => {
+                const confirmed = window.confirm(
+                  'Are you sure you want to delete your account? This will permanently remove all your data and cannot be undone.'
+                );
+                if (!confirmed) return;
+
+                const doubleConfirm = window.confirm(
+                  'This is permanent. All your profile data, connections, and game history will be deleted. Continue?'
+                );
+                if (!doubleConfirm) return;
+
+                try {
+                  if (!sbUser?.id) return;
+
+                  // Delete profile from database
+                  const { error: deleteError } = await supabase
+                    .from('profiles')
+                    .delete()
+                    .eq('id', sbUser.id);
+
+                  if (deleteError) {
+                    alert('Failed to delete account. Please try again.');
+                    return;
+                  }
+
+                  // Sign out
+                  await supabase.auth.signOut();
+                  setSbUser(null);
+                  setStudentProfile({
+                    firstName: '', lastName: '', email: '', password: '',
+                    year: '', major: '', school: '', company: '', workTitle: '', linkedinUrl: '',
+                  });
+                  setSeatedRole(null);
+                  setScreen('role');
+                  alert('Your account has been deleted.');
+                } catch (e) {
+                  alert('Failed to delete account. Please try again.');
+                }
+              }}
+              className={`w-full ${
+                selectedTheme === "notebook"
+                  ? "rounded-2xl border-2 border-red-400 text-red-500 px-4 py-3 text-sm font-semibold transition-all hover:bg-red-500 hover:text-white"
+                  : "rounded-2xl border border-red-500/50 text-red-400 px-4 py-3 text-sm font-semibold transition-colors hover:bg-red-500 hover:text-white hover:border-red-500"
+              }`}
+            >
+              Delete Account
+            </button>
+          </div>
         </div>
       </div>
     </main>

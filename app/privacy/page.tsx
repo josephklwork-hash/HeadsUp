@@ -62,14 +62,14 @@ export default function PrivacyPolicy() {
           <div>
             <h2 className="text-xl font-semibold text-white mb-2">6. Data Security</h2>
             <p>
-              We use industry-standard security measures including encrypted connections (HTTPS), secure authentication, and row-level security on our database. However, no method of transmission over the internet is 100% secure.
+              We use industry-standard security measures including encrypted connections (HTTPS), secure authentication, and row-level security on our database to keep your data safe.
             </p>
           </div>
 
           <div>
             <h2 className="text-xl font-semibold text-white mb-2">7. Data Retention</h2>
             <p>
-              We retain your account data for as long as your account is active. You may request deletion of your account and associated data by contacting us.
+              We retain your account data for as long as your account is active. You can delete your account and all associated data at any time from your profile settings.
             </p>
           </div>
 
@@ -87,7 +87,7 @@ export default function PrivacyPolicy() {
           <div>
             <h2 className="text-xl font-semibold text-white mb-2">9. Contact</h2>
             <p>
-              If you have questions about this Privacy Policy, please contact us at support@headsupnetwork.com.
+              If you have questions about this Privacy Policy, please contact us at josephklwork@gmail.com.
             </p>
           </div>
         </section>

@@ -9,7 +9,7 @@ export default function TermsOfService() {
           <div>
             <h2 className="text-xl font-semibold text-white mb-2">1. Acceptance of Terms</h2>
             <p>
-              By accessing or using HeadsUp at headsupnetwork.com (&quot;the Service&quot;), you agree to be bound by these Terms of Service. If you do not agree to these terms, do not use the Service.
+              By accessing or using HeadsUp at headsupnetwork.com (&quot;the Service&quot;), you agree to be bound by these Terms of Service. If you do not agree to these terms, you may not access or use the Service.
             </p>
           </div>
 
@@ -73,30 +73,23 @@ export default function TermsOfService() {
           </div>
 
           <div>
-            <h2 className="text-xl font-semibold text-white mb-2">9. Disclaimer of Warranties</h2>
+            <h2 className="text-xl font-semibold text-white mb-2">9. Disclaimer and Liability</h2>
             <p>
-              The Service is provided &quot;as is&quot; without warranties of any kind, either express or implied. We do not guarantee that the Service will be uninterrupted, secure, or error-free.
+              We are committed to providing a reliable and secure platform. HeadsUp is provided as a free networking and social gaming service. By using the Service, you acknowledge that HeadsUp is not responsible for any damages resulting from your use of the platform.
             </p>
           </div>
 
           <div>
-            <h2 className="text-xl font-semibold text-white mb-2">10. Limitation of Liability</h2>
-            <p>
-              To the fullest extent permitted by law, HeadsUp shall not be liable for any indirect, incidental, special, consequential, or punitive damages arising from your use of the Service.
-            </p>
-          </div>
-
-          <div>
-            <h2 className="text-xl font-semibold text-white mb-2">11. Changes to Terms</h2>
+            <h2 className="text-xl font-semibold text-white mb-2">10. Changes to Terms</h2>
             <p>
               We may update these Terms of Service from time to time. Continued use of the Service after changes constitutes acceptance of the updated terms.
             </p>
           </div>
 
           <div>
-            <h2 className="text-xl font-semibold text-white mb-2">12. Contact</h2>
+            <h2 className="text-xl font-semibold text-white mb-2">11. Contact</h2>
             <p>
-              If you have questions about these Terms, please contact us at support@headsupnetwork.com.
+              If you have questions about these Terms, please contact us at josephklwork@gmail.com.
             </p>
           </div>
         </section>
