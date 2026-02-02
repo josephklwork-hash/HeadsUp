@@ -319,7 +319,7 @@ const VALIDATION_SCHEMAS = {
     errorMessage: 'Name can only contain letters, spaces, hyphens, and apostrophes'
   },
   linkedinUrl: {
-    pattern: /^(https?:\/\/)?(www\.)?linkedin\.com\/in\/[\w-]+\/?$/i,
+    pattern: /^(https?:\/\/)?(www\.)?linkedin\.com\/in\/[\w-]+(\/)?(\?.*)?$/i,
     maxLength: 200,
     minLength: 0, // Optional
     errorMessage: 'Please enter a valid LinkedIn URL (e.g., https://linkedin.com/in/yourname)'
@@ -1468,7 +1468,7 @@ const [lastMessages, setLastMessages] = useState<Map<string, { text: string; cre
 
 async function sendConnectionRequest(recipientId: string, recipientName: string) {
   if (!sbUser?.id) return;
-  
+
   // Rate limiting handled client-side
   const rateLimitCheck = checkRateLimit('CONNECTION_REQUEST', sbUser.id);
   if (!rateLimitCheck.allowed) {
@@ -1476,9 +1476,22 @@ async function sendConnectionRequest(recipientId: string, recipientName: string)
     return;
   }
   recordRateLimitAttempt('CONNECTION_REQUEST', sbUser.id);
-  
+
   if (recipientId === sbUser.id) {
     alert('You cannot connect with yourself');
+    return;
+  }
+
+  // Limit: 3 connection requests per 24 hours (checked against database)
+  const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const { count } = await supabase
+    .from('connections')
+    .select('*', { count: 'exact', head: true })
+    .eq('requester_id', sbUser.id)
+    .gte('created_at', twentyFourHoursAgo);
+
+  if (count !== null && count >= 3) {
+    alert('You can only send 3 connection requests per day. Please try again tomorrow.');
     return;
   }
   
@@ -2074,8 +2087,6 @@ useEffect(() => {
         } else if (mounted && isOAuth) {
           // OAuth user with no profile yet — send to profile completion
           const oauthMeta = data.user.user_metadata || {};
-          const isLinkedIn = data.user.app_metadata?.provider === 'linkedin_oidc';
-          const linkedinSub = isLinkedIn ? (oauthMeta.sub || oauthMeta.provider_id || '') : '';
           setStudentProfile({
             firstName: oauthMeta.full_name?.split(' ')[0] || oauthMeta.given_name || '',
             lastName: oauthMeta.full_name?.split(' ').slice(1).join(' ') || oauthMeta.family_name || '',
@@ -2086,7 +2097,7 @@ useEffect(() => {
             school: '',
             company: '',
             workTitle: '',
-            linkedinUrl: isLinkedIn && linkedinSub ? `https://linkedin.com/in/${linkedinSub}` : '',
+            linkedinUrl: '',
           });
           setSeatedRole("student");
           setScreen('oauthProfileCompletion');
@@ -2130,8 +2141,6 @@ useEffect(() => {
         } else if (mounted) {
           // New OAuth user — pre-fill from provider metadata
           const oauthMeta = user.user_metadata || {};
-          const isLinkedIn = user.app_metadata?.provider === 'linkedin_oidc';
-          const linkedinSub = isLinkedIn ? (oauthMeta.sub || oauthMeta.provider_id || '') : '';
           setStudentProfile({
             firstName: oauthMeta.full_name?.split(' ')[0] || oauthMeta.given_name || '',
             lastName: oauthMeta.full_name?.split(' ').slice(1).join(' ') || oauthMeta.family_name || '',
@@ -2142,7 +2151,7 @@ useEffect(() => {
             school: '',
             company: '',
             workTitle: '',
-            linkedinUrl: isLinkedIn && linkedinSub ? `https://linkedin.com/in/${linkedinSub}` : '',
+            linkedinUrl: '',
           });
           setSeatedRole("student");
           setScreen('oauthProfileCompletion');
@@ -6114,14 +6123,21 @@ if (screen === "oauthProfileCompletion") {
             type="button"
             disabled={creatingAccount}
             onClick={async () => {
-              await supabase.auth.signOut();
-              setSbUser(null);
-              setStudentProfile({
-                firstName: '', lastName: '', email: '', password: '',
-                year: '', major: '', school: '', company: '', workTitle: '', linkedinUrl: '',
-              });
-              setSeatedRole(null);
-              setScreen('role');
+              try {
+                await supabase.auth.signOut();
+                setSbUser(null);
+                setStudentProfile({
+                  firstName: '', lastName: '', email: '', password: '',
+                  year: '', major: '', school: '', company: '', workTitle: '', linkedinUrl: '',
+                });
+                setSeatedRole(null);
+                sessionStorage.removeItem('headsup_screen');
+                setScreen('role');
+              } catch (e) {
+                setSbUser(null);
+                sessionStorage.removeItem('headsup_screen');
+                setScreen('role');
+              }
             }}
             className={`rounded-2xl border border-white text-white px-4 py-3 text-sm font-semibold transition-colors ${creatingAccount ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-50 hover:text-black"}`}
           >
@@ -6699,7 +6715,7 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
   <button
     className="w-full rounded-2xl border border-black bg-white px-5 py-4 font-semibold text-black transition-colors hover:bg-gray-50"
   >
-    Browse students
+    View Students
   </button>
 
   <div className="max-h-[70vh] overflow-y-auto pr-4 flex flex-col gap-3">
@@ -6818,7 +6834,7 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
   <button
     className="w-full rounded-2xl border border-black bg-white px-5 py-4 font-semibold text-black transition-colors hover:bg-gray-50"
   >
-    View professionals
+    View Professionals
   </button>
 
   <div className="max-h-[70vh] overflow-y-auto pr-4 flex flex-col gap-3">
@@ -7226,7 +7242,7 @@ if (screen === "professionalDashboard" && seatedRole === "professional") {
   <button
     className="w-full rounded-2xl border border-black bg-white px-5 py-4 font-semibold text-black transition-colors hover:bg-gray-50"
   >
-    Browse Students
+    View Students
   </button>
 
   <div className="max-h-[70vh] overflow-y-auto pr-2 flex flex-col gap-3">
