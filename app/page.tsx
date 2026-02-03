@@ -1694,9 +1694,10 @@ const createDailyRoom = async () => {
   setRoomCreationError(null);
 
   try {
-    const { data, error } = await supabase.functions.invoke('create-daily-room', {
-      body: { gameId }
-    });
+    const { data, error } = await Promise.race([
+      supabase.functions.invoke('create-daily-room', { body: { gameId } }),
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error('Request timed out')), 10000))
+    ]);
 
     if (error) {
       console.error('Edge function error:', error);
@@ -2974,20 +2975,23 @@ async function joinPinGame() {
   try {
     let user: User;
     try {
+      const authTimeout = <T,>(p: Promise<T>) =>
+        Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), 8000))]);
+
       // Try local session first (instant)
-      const { data: sessionData } = await supabase.auth.getSession();
+      const { data: sessionData } = await authTimeout(supabase.auth.getSession());
 
       if (sessionData?.session?.user) {
         user = sessionData.session.user;
       } else {
         // No valid session — sign out to clear stale tokens, then create fresh anonymous user
         await supabase.auth.signOut().catch(() => {});
-        const { data: anonData, error: anonErr } = await supabase.auth.signInAnonymously();
+        const { data: anonData, error: anonErr } = await authTimeout(supabase.auth.signInAnonymously());
         if (anonErr || !anonData.user) throw anonErr;
         user = anonData.user;
       }
     } catch (e) {
-      alert("Could not connect. Check your internet.");
+      alert("Could not start session. Check your internet and try again.");
       return;
     }
 
@@ -8678,7 +8682,8 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
               }}
               onError={(err) => {
                 console.error('Daily video error:', err);
-                setRoomCreationError('Video connection failed');
+                setRoomCreationError(err?.message || 'Video connection failed');
+                setDailyRoomUrl(null);
               }}
             />
           )}

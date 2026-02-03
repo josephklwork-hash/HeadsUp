@@ -86,18 +86,35 @@ export default function DailyVideoCall({
           isJoiningRef.current = false;
         });
 
+        callObject.on('error', (evt: any) => {
+          console.error('Daily call error event:', evt);
+          onError?.(new Error(evt?.errorMsg || 'Video call error'));
+          isJoiningRef.current = false;
+        });
+
         callObjectRef.current = callObject;
 
-        await callObject.join({ url: roomUrl });
+        // Timeout the join call to prevent indefinite hangs
+        await Promise.race([
+          callObject.join({ url: roomUrl }),
+          new Promise<never>((_, rej) => setTimeout(() => rej(new Error('Video call timed out')), 15000))
+        ]);
 
-        // Set gallery view as default
-        await callObject.setShowNamesMode('always');
-        await callObject.setActiveSpeakerMode(false);
+        // Set gallery view as default (non-critical, don't let these fail the call)
+        try {
+          callObject.setShowNamesMode('always');
+          callObject.setActiveSpeakerMode(false);
+        } catch (_) {}
 
         onJoinedCall?.();
         isJoiningRef.current = false;
       } catch (err: any) {
         console.error('Error setting up call:', err);
+        // Clean up the frame if join failed
+        if (callObjectRef.current) {
+          try { await callObjectRef.current.destroy(); } catch (_) {}
+          callObjectRef.current = null;
+        }
         onError?.(err);
         isJoiningRef.current = false;
       }
