@@ -250,22 +250,26 @@ function LogContent({
             {displayedActionLog.slice(-30).map((a) => (
               <div
                 key={a.id}
-                className={`grid w-full grid-cols-[70px_1fr_auto] items-center gap-x-2 ${compact ? 'py-1.5' : 'py-2'} leading-none`}
+                className={`grid w-full grid-cols-[1fr_2fr_1fr] items-center gap-x-2 ${compact ? 'py-1.5' : 'py-2'} leading-none`}
               >
                 <div
-                  className={`text-left ${compact ? 'text-[10px]' : 'text-xs'} uppercase tracking-wide text-white/60 leading-none`}
-                  style={{ paddingTop: "3px" }}
+                  className={`text-center ${compact ? 'text-[10px]' : 'text-xs'} uppercase tracking-wide text-white/60 leading-none overflow-hidden whitespace-nowrap`}
+                  style={{ maskImage: 'linear-gradient(to right, transparent, black 2px, black calc(100% - 2px), transparent)', WebkitMaskImage: 'linear-gradient(to right, transparent, black 2px, black calc(100% - 2px), transparent)' }}
                 >
                   {a.street}
                 </div>
 
                 <div
-                  className={`text-center font-semibold text-white leading-none truncate ${compact ? 'text-xs' : ''}`}
+                  className={`text-center font-semibold text-white leading-none overflow-hidden whitespace-nowrap ${compact ? 'text-xs' : ''}`}
+                  style={{ maskImage: 'linear-gradient(to right, transparent, black 2px, black calc(100% - 2px), transparent)', WebkitMaskImage: 'linear-gradient(to right, transparent, black 2px, black calc(100% - 2px), transparent)' }}
                 >
                   {a.seat === myActualSeat ? `You (${heroPosLabel})` : `Opponent (${oppPosLabel})`}
                 </div>
 
-                <div className={`text-right text-white/90 tabular-nums break-words leading-none ${compact ? 'text-xs' : ''}`}>
+                <div
+                  className={`text-center text-white/90 tabular-nums leading-none overflow-hidden whitespace-nowrap ${compact ? 'text-xs' : ''}`}
+                  style={{ maskImage: 'linear-gradient(to right, transparent, black 2px, black calc(100% - 2px), transparent)', WebkitMaskImage: 'linear-gradient(to right, transparent, black 2px, black calc(100% - 2px), transparent)' }}
+                >
                   {renderActionText(a.text)}
                 </div>
               </div>
