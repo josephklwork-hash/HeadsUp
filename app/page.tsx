@@ -365,6 +365,8 @@ const [mpState, setMpState] = useState<HostState | null>(null);
   const suppressMpRef = useRef(false);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mpChannelRef = useRef<any>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const tempChannelRef = useRef<any>(null);
 
   function _applyActionFromSeat(seat: Seat, action: GameAction) {
     // remote actions must bypass local click gating
@@ -980,6 +982,12 @@ useEffect(() => {
 useEffect(() => {
   if (!gameId) return;
   if (!multiplayerActive) return;
+
+  // Clean up temp channel from joinPinGame to avoid duplicate channel collision
+  if (tempChannelRef.current) {
+    supabase.removeChannel(tempChannelRef.current);
+    tempChannelRef.current = null;
+  }
 
   const ch = supabase.channel(`game:${gameId}`);
   mpChannelRef.current = ch;
@@ -2205,7 +2213,13 @@ async function joinPinGame() {
     await supabase.from("games").update({ status: "active" }).eq("id", gameRow.id);
 
     // Broadcast to host that joiner has joined
+    // Clean up any previous temp channel
+    if (tempChannelRef.current) {
+      supabase.removeChannel(tempChannelRef.current);
+      tempChannelRef.current = null;
+    }
     const tempChannel = supabase.channel(`game:${gameRow.id}`);
+    tempChannelRef.current = tempChannel;
     tempChannel.subscribe((status) => {
       if (status === 'SUBSCRIBED') {
         const notifyHost = () => {
