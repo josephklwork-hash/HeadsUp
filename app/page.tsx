@@ -2742,8 +2742,8 @@ const displayBottomShowed = multiplayerActive && mpState ? mpState.bottomShowed 
     for (const entry of newEntries) {
       const text = entry.text.toLowerCase();
 
-      // Skip blind posts, wins, shows, splits — no animation for those
-      if (/^(posts|wins|shows|split)/.test(text)) continue;
+      // Skip blind posts, wins, shows, splits, mucks — no animation for those
+      if (/^(posts|wins|shows|split|muck)/.test(text)) continue;
 
       const seatIsHero = entry.seat === myActualSeat;
       const animSeat: 'hero' | 'opponent' = seatIsHero ? 'hero' : 'opponent';
