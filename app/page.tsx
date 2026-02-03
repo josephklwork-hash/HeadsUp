@@ -7,909 +7,59 @@ import { supabase } from "@/lib/supabaseClient";
 
 import { MultiplayerHost } from "./multiplayerHost";
 import { MultiplayerJoiner } from "./multiplayerJoiner";
-import type { HostState, GameAction } from "./multiplayerHost";
+import type { HostState } from "./multiplayerHost";
 import DailyVideoCall from './components/DailyVideoCall';
 
+import type {
+  Role, Screen, Seat, Card, Street, StreetName,
+  GameState, HandResult, HandEndReason,
+  ActionLogItem, HandLogSnapshot, AuthoritativeState,
+} from './types';
+import {
+  drawUniqueCards, roundToHundredth, formatBB,
+  clamp, uid, streetNameFromCount,
+} from './utils/formatting';
+import {
+  checkRateLimit, recordRateLimitAttempt,
+  validateMessage,
+} from './utils/validation';
+import {
+  initAudio, setMuted as setSoundMuted,
+  playDealCard, playCheck, playCall, playBetRaise,
+  playFold, playAllIn, playWin, playLose,
+} from './utils/soundManager';
+
 export const dynamic = 'force-dynamic';  // ← THIS LINE
-
-/* ---------- types ---------- */
-
-type Role = "student" | "professional";
-
-type Screen =
-  | "role"
-  | "studentProfile"
-  | "studentLogin"
-  | "oauthProfileCompletion"
-  | "dashboard"
-  | "professionalDashboard"
-  | "editProfile"
-  | "connections"
-  | "about"
-  | "game";
-
-type Seat = "top" | "bottom";
-
-type Card = {
-  rank: string;
-  suit: string;
-};
-
-type Street = 0 | 3 | 4 | 5;
-type StreetName = "Preflop" | "Flop" | "Turn" | "River";
-
-type GameState = {
-  stacks: { top: number; bottom: number };
-  bets: { top: number; bottom: number }; // chips currently in front (this street)
-  pot: number; // chips already pulled into pot from prior streets
-};
-
-type HandStatus = "playing" | "ended";
-type HandEndReason = "fold" | "showdown" | null;
-
-type HandResult = {
-  status: HandStatus;
-  winner: Seat | "tie" | null;
-  reason: HandEndReason;
-  message: string;
-  potWon: number;
-};
-
-type ActionLogItem = {
-  id: string;
-  sequence: number;
-  street: StreetName;
-  seat: Seat;
-  text: string;
-};
-
-type HandLogSnapshot = {
-  handNo: number;
-  dealer: Seat;
-  endedStreet: Street;
-  endedBoard: Card[];
-  log: ActionLogItem[];
-
-  heroPos: "SB" | "BB";
-  oppPos: "SB" | "BB";
-
-  heroCards: [Card, Card];
-  oppCards: [Card, Card];
-
-  // true only if player actually showed / was required to show
-  heroShown: boolean;
-  oppShown: boolean;
-
-  heroStartStack: number;
-  oppStartStack: number;
-
-  // Hand ranks for display in history
-  heroHandRank: string | null;
-  oppHandRank: string | null;
-  
-  // Best 5-card hands
-  heroBest5?: Card[];
-  oppBest5?: Card[];
-  heroHandDesc?: string;
-  oppHandDesc?: string;
-};
-
-type AuthoritativeState = {
-  street: Street;
-  toAct: Seat;
-
-  actionLog: ActionLogItem[];
-  handResult: HandResult;
-
-  gameOver: boolean;
-  endedBoardSnapshot: Street;
-
-  lastAggressor: Seat | null;
-  actionsThisStreet: number;
-  lastToActAfterAggro: Seat | null;
-  sawCallThisStreet: boolean;
-  lastRaiseSize: number;
-  checked: { top: boolean; bottom: boolean };
-
-  showdownFirst: Seat | null;
-  oppRevealed: boolean;
-  youMucked: boolean;
-  streetBettor: Seat | null;
-  canShowTop: boolean;
-  canShowBottom: boolean;
-  topShowed: boolean;
-  bottomShowed: boolean;
-};
-
-/* ---------- constants ---------- */
-
-const RANKS = ["A", "K", "Q", "J", "T", "9", "8", "7", "6", "5", "4", "3", "2"];
-const SUITS = ["♠", "♥", "♦", "♣"];
 
 // Game configuration imported from shared gameConfig.ts file
 // To change game settings, edit gameConfig.ts
 const STARTING_STACK_BB = GAME_CONFIG.STARTING_STACK_BB;
 
-/* ---------- helpers ---------- */
+import {
+  RANK_TO_VALUE, VALUE_TO_NAME, compareScore, evaluate7,
+  cardStr, handDesc, handRankOnly, pluralRank,
+  best5From7, sortBest5ForDisplay,
+} from './poker/evaluator';
 
-function drawUniqueCards(count: number): Card[] {
-  const deck: Card[] = [];
-  for (const suit of SUITS) for (const rank of RANKS) deck.push({ rank, suit });
-
-  for (let i = deck.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [deck[i], deck[j]] = [deck[j], deck[i]];
-  }
-
-  return deck.slice(0, count);
-}
-
-function roundToHundredth(n: number) {
-  return Math.round(n * 100) / 100;
-}
-
-function formatBB(value: number | "") {
-  if (value === "") return "";
-  if (Number.isInteger(value)) return value.toString();
-  return value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
-}
-
-function toTitleCase(str: string): string {
-  if (!str) return str;
-  const minorWords = ['of', 'the', 'and', 'in', 'on', 'at', 'to', 'for', 'a', 'an'];
-  return str
-    .toLowerCase()
-    .split(' ')
-    .map((word, index) => {
-      // Handle hyphenated words - capitalize each part (e.g., "kim-lee" -> "Kim-Lee")
-      if (word.includes('-')) {
-        return word
-          .split('-')
-          .map(part => part.charAt(0).toUpperCase() + part.slice(1))
-          .join('-');
-      }
-      // Always capitalize first word, otherwise check if it's a minor word
-      if (index === 0 || !minorWords.includes(word)) {
-        return word.charAt(0).toUpperCase() + word.slice(1);
-      }
-      return word;
-    })
-    .join(' ');
-}
-
-function clamp(n: number, lo: number, hi: number) {
-  return Math.max(lo, Math.min(hi, n));
-}
-
-function uid() {
-  return Math.random().toString(16).slice(2) + "-" + Date.now().toString(16);
-}
-
-/* ============================================
-   SECURITY MODULE - OWASP Best Practices
-   ============================================
-   This module provides:
-   - Input validation & sanitization
-   - Rate limiting utilities
-   - Schema-based validation
-   - XSS prevention
-   ============================================ */
-
-// --------------------------------------------
-// RATE LIMITING CONFIGURATION
-// --------------------------------------------
-const RATE_LIMITS = {
-  // Auth operations (prevent brute force)
-  LOGIN: { maxAttempts: 5, windowMs: 60000, lockoutMs: 300000 },      // 5 attempts/min, 5min lockout
-  SIGNUP: { maxAttempts: 3, windowMs: 60000, lockoutMs: 600000 },     // 3 attempts/min, 10min lockout
-  PIN_JOIN: { maxAttempts: 5, windowMs: 60000, lockoutMs: 60000 },    // 5 attempts/min, 1min lockout
-  
-  // Data operations (prevent spam/abuse)
-  GAME_CREATE: { maxAttempts: 10, windowMs: 3600000, lockoutMs: 0 },  // 10/hour (handled by SQL)
-  MESSAGE_SEND: { maxAttempts: 30, windowMs: 60000, lockoutMs: 30000 }, // 30/min, 30s lockout
-  CONNECTION_REQUEST: { maxAttempts: 20, windowMs: 3600000, lockoutMs: 0 }, // 20/hour
-} as const;
-
-type RateLimitKey = keyof typeof RATE_LIMITS;
-
-// In-memory rate limit tracking (resets on page refresh - for client-side protection)
-// Server-side RLS provides the real protection
-const rateLimitStore: Record<string, { attempts: number; firstAttempt: number; lockedUntil: number }> = {};
-
-/**
- * Check if an action is rate limited
- * @returns { allowed: boolean, remainingAttempts: number, retryAfter: number }
- */
-function checkRateLimit(key: RateLimitKey, identifier: string = 'default'): { 
-  allowed: boolean; 
-  remainingAttempts: number; 
-  retryAfter: number;
-  message: string;
-} {
-  const config = RATE_LIMITS[key];
-  const storeKey = `${key}:${identifier}`;
-  const now = Date.now();
-  
-  // Initialize or get existing record
-  if (!rateLimitStore[storeKey]) {
-    rateLimitStore[storeKey] = { attempts: 0, firstAttempt: now, lockedUntil: 0 };
-  }
-  
-  const record = rateLimitStore[storeKey];
-  
-  // Check if currently locked out
-  if (record.lockedUntil > now) {
-    const retryAfter = Math.ceil((record.lockedUntil - now) / 1000);
-    return {
-      allowed: false,
-      remainingAttempts: 0,
-      retryAfter,
-      message: `Too many attempts. Please try again in ${retryAfter} seconds.`
-    };
-  }
-  
-  // Reset window if expired
-  if (now - record.firstAttempt > config.windowMs) {
-    record.attempts = 0;
-    record.firstAttempt = now;
-  }
-  
-  // Check if over limit
-  if (record.attempts >= config.maxAttempts) {
-    record.lockedUntil = now + config.lockoutMs;
-    const retryAfter = Math.ceil(config.lockoutMs / 1000);
-    return {
-      allowed: false,
-      remainingAttempts: 0,
-      retryAfter,
-      message: `Rate limit exceeded. Please try again in ${retryAfter} seconds.`
-    };
-  }
-  
-  return {
-    allowed: true,
-    remainingAttempts: config.maxAttempts - record.attempts,
-    retryAfter: 0,
-    message: ''
-  };
-}
-
-/**
- * Record an attempt for rate limiting
- */
-function recordRateLimitAttempt(key: RateLimitKey, identifier: string = 'default'): void {
-  const storeKey = `${key}:${identifier}`;
-  if (!rateLimitStore[storeKey]) {
-    rateLimitStore[storeKey] = { attempts: 0, firstAttempt: Date.now(), lockedUntil: 0 };
-  }
-  rateLimitStore[storeKey].attempts++;
-}
-
-/**
- * Reset rate limit (e.g., after successful login)
- */
-function resetRateLimit(key: RateLimitKey, identifier: string = 'default'): void {
-  const storeKey = `${key}:${identifier}`;
-  delete rateLimitStore[storeKey];
-}
-
-// --------------------------------------------
-// INPUT VALIDATION SCHEMAS
-// --------------------------------------------
-const VALIDATION_SCHEMAS = {
-  email: {
-    pattern: /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/,
-    maxLength: 254,
-    minLength: 5,
-    errorMessage: 'Please enter a valid email address'
-  },
-  password: {
-    minLength: 8,
-    maxLength: 128,
-    requireUppercase: true,
-    requireLowercase: true,
-    requireNumber: true,
-    requireSpecial: false,
-    errorMessage: 'Password must be at least 8 characters with uppercase, lowercase, and number'
-  },
-  name: {
-    pattern: /^[a-zA-Z\s'-]+$/,
-    maxLength: 50,
-    minLength: 1,
-    errorMessage: 'Name can only contain letters, spaces, hyphens, and apostrophes'
-  },
-  linkedinUrl: {
-    pattern: /^(https?:\/\/)?(www\.)?linkedin\.com\/in\/[\w-]+(\/)?(\?.*)?$/i,
-    maxLength: 200,
-    minLength: 0, // Optional
-    errorMessage: 'Please enter a valid LinkedIn URL (e.g., https://linkedin.com/in/yourname)'
-  },
-  gamePin: {
-    pattern: /^\d{4}$/,
-    maxLength: 4,
-    minLength: 4,
-    errorMessage: 'PIN must be exactly 4 digits'
-  },
-  message: {
-    maxLength: 2000,
-    minLength: 1,
-    errorMessage: 'Message must be between 1 and 2000 characters'
-  },
-  generalText: {
-    maxLength: 200,
-    minLength: 0,
-    errorMessage: 'Text exceeds maximum length'
-  }
-} as const;
-
-type ValidationSchemaKey = keyof typeof VALIDATION_SCHEMAS;
-
-/**
- * Validate input against a schema
- * @returns { valid: boolean, sanitized: string, error: string }
- */
-function validateInput(
-  value: string, 
-  schemaKey: ValidationSchemaKey,
-  options?: { required?: boolean }
-): { valid: boolean; sanitized: string; error: string } {
-  const schema = VALIDATION_SCHEMAS[schemaKey];
-  const required = options?.required ?? false;
-  
-  // Handle empty values
-  if (!value || value.trim() === '') {
-    if (required) {
-      return { valid: false, sanitized: '', error: 'This field is required' };
-    }
-    return { valid: true, sanitized: '', error: '' };
-  }
-  
-  // Sanitize: trim whitespace, remove null bytes, strip HTML tags
-  let sanitized = value
-    .trim()
-    .replace(/\0/g, '')           // Remove null bytes
-    .replace(/<[^>]*>/g, '')      // Strip HTML tags
-    .replace(/[<>]/g, '')         // Remove remaining angle brackets
-    .slice(0, schema.maxLength);  // Enforce max length
-  
-  // Check minimum length
-  if ('minLength' in schema && sanitized.length < schema.minLength) {
-    return { 
-      valid: false, 
-      sanitized, 
-      error: schema.errorMessage 
-    };
-  }
-  
-  // Check pattern if exists
-  if ('pattern' in schema && schema.pattern && !schema.pattern.test(sanitized)) {
-    return { 
-      valid: false, 
-      sanitized, 
-      error: schema.errorMessage 
-    };
-  }
-  
-  return { valid: true, sanitized, error: '' };
-}
-
-/**
- * Validate password with detailed requirements
- */
-function validatePassword(password: string): { 
-  valid: boolean; 
-  errors: string[];
-  strength: 'weak' | 'medium' | 'strong';
-} {
-  const errors: string[] = [];
-  const schema = VALIDATION_SCHEMAS.password;
-  
-  if (password.length < schema.minLength) {
-    errors.push(`Password must be at least ${schema.minLength} characters`);
-  }
-  if (password.length > schema.maxLength) {
-    errors.push(`Password must be less than ${schema.maxLength} characters`);
-  }
-  if (schema.requireUppercase && !/[A-Z]/.test(password)) {
-    errors.push('Password must contain an uppercase letter');
-  }
-  if (schema.requireLowercase && !/[a-z]/.test(password)) {
-    errors.push('Password must contain a lowercase letter');
-  }
-  if (schema.requireNumber && !/[0-9]/.test(password)) {
-    errors.push('Password must contain a number');
-  }
-  if (schema.requireSpecial && !/[!@#$%^&*(),.?":{}|<>]/.test(password)) {
-    errors.push('Password must contain a special character');
-  }
-  
-  // Calculate strength
-  let strength: 'weak' | 'medium' | 'strong' = 'weak';
-  if (errors.length === 0) {
-    const hasSpecial = /[!@#$%^&*(),.?":{}|<>]/.test(password);
-    const isLong = password.length >= 12;
-    if (hasSpecial && isLong) {
-      strength = 'strong';
-    } else if (hasSpecial || isLong) {
-      strength = 'medium';
-    } else {
-      strength = 'medium';
-    }
-  }
-  
-  return { valid: errors.length === 0, errors, strength };
-}
-
-/**
- * Validate email format with strict validation
- */
-function validateEmail(email: string): { valid: boolean; sanitized: string; error: string } {
-  const result = validateInput(email, 'email', { required: true });
-  if (!result.valid) return result;
-  
-  const sanitized = result.sanitized.toLowerCase();
-  const [localPart, domain] = sanitized.split('@');
-  
-  // Require at least 3 characters before @
-  if (!localPart || localPart.length < 3) {
-    return { valid: false, sanitized, error: 'Please enter a valid email address' };
-  }
-  
-  // Block common fake/test domains
-  const blockedDomains = [
-    'a.com', 'b.com', 'c.com', 'test.com', 'fake.com', 'example.com',
-    'asdf.com', 'qwerty.com', 'temp.com', 'trash.com', 'junk.com',
-    'aa.com', 'ab.com', 'abc.com', 'xyz.com', 'aaa.com', 'bbb.com',
-    'mailinator.com', 'guerrillamail.com', 'tempmail.com', 'throwaway.com',
-    '10minutemail.com', 'fakeinbox.com', 'trashmail.com'
-  ];
-  
-  if (!domain || blockedDomains.includes(domain)) {
-    return { valid: false, sanitized, error: 'Please use a valid email address (no temporary or fake emails)' };
-  }
-  
-  // Require domain to have at least 4 characters (e.g., a.co)
-  if (domain.length < 4) {
-    return { valid: false, sanitized, error: 'Please enter a valid email address' };
-  }
-  
-  return { valid: true, sanitized, error: '' };
-}
-
-/**
- * Sanitize and validate a profile object
- * Rejects unexpected fields (defense against mass assignment)
- */
-function validateProfileData(data: Record<string, unknown>): {
-  valid: boolean;
-  sanitized: Record<string, string>;
-  errors: Record<string, string>;
-} {
-  const allowedFields = ['firstName', 'lastName', 'email', 'year', 'major', 'school', 'company', 'workTitle', 'linkedinUrl'];
-  const sanitized: Record<string, string> = {};
-  const errors: Record<string, string> = {};
-  
-  // Reject unexpected fields
-  for (const key of Object.keys(data)) {
-    if (!allowedFields.includes(key)) {
-      errors[key] = `Unexpected field: ${key}`;
-    }
-  }
-  
-  // Validate each allowed field
-  const fieldValidations: Record<string, { schema: ValidationSchemaKey; required: boolean }> = {
-    firstName: { schema: 'name', required: true },
-    lastName: { schema: 'name', required: true },
-    email: { schema: 'email', required: true },
-    year: { schema: 'generalText', required: false },
-    major: { schema: 'generalText', required: false },
-    school: { schema: 'generalText', required: false },
-    company: { schema: 'generalText', required: false },
-    workTitle: { schema: 'generalText', required: false },
-    linkedinUrl: { schema: 'linkedinUrl', required: false },
-  };
-  
-  for (const [field, config] of Object.entries(fieldValidations)) {
-    const value = data[field];
-    if (typeof value === 'string' || value === undefined || value === null) {
-      const result = validateInput(String(value || ''), config.schema, { required: config.required });
-      sanitized[field] = result.sanitized;
-      if (!result.valid) {
-        errors[field] = result.error;
-      }
-    } else {
-      errors[field] = 'Invalid type: expected string';
-    }
-  }
-  
-  return {
-    valid: Object.keys(errors).length === 0,
-    sanitized,
-    errors
-  };
-}
-
-/**
- * Validate message content
- */
-function validateMessage(text: string): { valid: boolean; sanitized: string; error: string } {
-  if (!text || text.trim() === '') {
-    return { valid: false, sanitized: '', error: 'Message cannot be empty' };
-  }
-  
-  const result = validateInput(text, 'message', { required: true });
-  
-  // Additional XSS prevention for messages
-  result.sanitized = result.sanitized
-    .replace(/javascript:/gi, '')
-    .replace(/on\w+=/gi, '')
-    .replace(/data:/gi, '');
-  
-  return result;
-}
-
-/* ============================================
-   END SECURITY MODULE
-   ============================================ */
-
-// Helper to get sort priority for dashboard ordering
-// A=0: Accept/Reject (incoming), B=1: Connected, C=2: Pending (outgoing), D=3: Connect (no relation)
-function getConnectionSortPriority(
-  userId: string,
-  myConnections: Set<string>,
-  pendingOutgoing: Set<string>,
-  pendingIncoming: Map<string, { id: string; createdAt: string }>
-): number {
-  if (pendingIncoming.has(userId)) return 0; // A - Accept/Reject
-  if (myConnections.has(userId)) return 1;   // B - Connected
-  if (pendingOutgoing.has(userId)) return 2; // C - Pending
-  return 3;                                   // D - Connect
-}
-
-function streetNameFromCount(street: Street): StreetName {
-  if (street === 0) return "Preflop";
-  if (street === 3) return "Flop";
-  if (street === 4) return "Turn";
-  return "River";
-}
-
-/* ---------- input validation helpers ---------- */
-// NOTE: Validation functions are now in the SECURITY MODULE above (lines 157-493)
-// Using: validatePassword, validateEmail, validateInput, validateProfileData, validateMessage
-// Old functions (isValidLinkedInUrl, sanitizeInput, isStrongPassword) have been removed
-
-/* ---------- simple poker evaluator (7-card) ---------- */
-
-const RANK_TO_VALUE: Record<string, number> = {
-  A: 14,
-  K: 13,
-  Q: 12,
-  J: 11,
-  T: 10,
-  "9": 9,
-  "8": 8,
-  "7": 7,
-  "6": 6,
-  "5": 5,
-  "4": 4,
-  "3": 3,
-  "2": 2,
-};
-
-function compareScore(a: number[], b: number[]) {
-  const len = Math.max(a.length, b.length);
-  for (let i = 0; i < len; i++) {
-    const av = a[i] ?? 0;
-    const bv = b[i] ?? 0;
-    if (av > bv) return 1;
-    if (av < bv) return -1;
-  }
-  return 0;
-}
-
-function getStraightHigh(valuesUniqueDesc: number[]) {
-  const vals = [...valuesUniqueDesc];
-  if (vals[0] === 14) vals.push(1); // wheel
-
-  let run = 1;
-  for (let i = 0; i < vals.length - 1; i++) {
-    if (vals[i] - 1 === vals[i + 1]) {
-      run++;
-      if (run >= 5) {
-        const high = vals[i - 3];
-        return high === 1 ? 5 : high;
-      }
-    } else {
-      run = 1;
-    }
-  }
-  return null;
-}
-
-function evaluate7(cards: Card[]) {
-  const values = cards.map((c) => RANK_TO_VALUE[c.rank]).sort((a, b) => b - a);
-
-  const counts = new Map<number, number>();
-  const suits = new Map<string, number[]>();
-
-  for (const c of cards) {
-    const v = RANK_TO_VALUE[c.rank];
-    counts.set(v, (counts.get(v) ?? 0) + 1);
-    const arr = suits.get(c.suit) ?? [];
-    arr.push(v);
-    suits.set(c.suit, arr);
-  }
-
-  const groups = Array.from(counts.entries())
-    .map(([v, cnt]) => ({ v, cnt }))
-    .sort((a, b) => (b.cnt !== a.cnt ? b.cnt - a.cnt : b.v - a.v));
-
-  // Flush?
-  let flushSuit: string | null = null;
-  let flushValsDesc: number[] = [];
-  for (const [s, vals] of suits.entries()) {
-    if (vals.length >= 5) {
-      const sorted = vals.slice().sort((a, b) => b - a);
-      if (!flushSuit || compareScore(sorted, flushValsDesc) > 0) {
-        flushSuit = s;
-        flushValsDesc = sorted;
-      }
-    }
-  }
-
-  const uniqueDesc = Array.from(new Set(values)).sort((a, b) => b - a);
-  const straightHigh = getStraightHigh(uniqueDesc);
-
-  // Straight flush
-  if (flushSuit) {
-    const fvUnique = Array.from(new Set(flushValsDesc)).sort((a, b) => b - a);
-    const sfHigh = getStraightHigh(fvUnique);
-    if (sfHigh !== null) return [8, sfHigh];
-  }
-
-  // Quads
-  if (groups[0]?.cnt === 4) {
-    const quad = groups[0].v;
-    const kicker = uniqueDesc.find((v) => v !== quad) ?? 0;
-    return [7, quad, kicker];
-  }
-
-  // Full house
-  if (groups[0]?.cnt === 3) {
-    const trips = groups[0].v;
-    const pairCandidate = groups.find((g) => g.v !== trips && g.cnt >= 2);
-    if (pairCandidate) return [6, trips, pairCandidate.v];
-  }
-
-  // Flush
-  if (flushSuit) return [5, ...flushValsDesc.slice(0, 5)];
-
-  // Straight
-  if (straightHigh !== null) return [4, straightHigh];
-
-  // Trips
-  if (groups[0]?.cnt === 3) {
-    const trips = groups[0].v;
-    const kickers = uniqueDesc.filter((v) => v !== trips).slice(0, 2);
-    return [3, trips, ...kickers];
-  }
-
-  // Two pair
-  if (groups[0]?.cnt === 2) {
-    const pairs = groups.filter((g) => g.cnt === 2).map((g) => g.v);
-    if (pairs.length >= 2) {
-      const sorted = pairs.sort((a, b) => b - a);
-      const highPair = sorted[0];
-      const lowPair = sorted[1];
-      const kicker = uniqueDesc.find((v) => v !== highPair && v !== lowPair) ?? 0;
-      return [2, highPair, lowPair, kicker];
-    }
-  }
-
-  // One pair
-  if (groups[0]?.cnt === 2) {
-    const pair = groups[0].v;
-    const kickers = uniqueDesc.filter((v) => v !== pair).slice(0, 3);
-    return [1, pair, ...kickers];
-  }
-
-  // High card
-  return [0, ...uniqueDesc.slice(0, 5)];
-}
-
-const VALUE_TO_NAME: Record<number, string> = {
-  14: "Ace",
-  13: "King",
-  12: "Queen",
-  11: "Jack",
-  10: "Ten",
-  9: "Nine",
-  8: "Eight",
-  7: "Seven",
-  6: "Six",
-  5: "Five",
-  4: "Four",
-  3: "Three",
-  2: "Two",
-};
-
-function pluralRank(v: number) {
-  const name = VALUE_TO_NAME[v] ?? String(v);
-  // simple plural for poker ranks
-  if (name === "Six") return "Sixes";
-  return name + "s";
-}
-
-function cardStr(c: Card) {
-  return `${c.rank}${c.suit}`;
-}
-
-function handDesc(score: number[]) {
-  const cat = score[0];
-
-  // score formats from your evaluator:
-  // 8: [8, sfHigh]
-  // 7: [7, quad, kicker]
-  // 6: [6, trips, pair]
-  // 5: [5, v1, v2, v3, v4, v5] (flush high cards)
-  // 4: [4, straightHigh]
-  // 3: [3, trips, k1, k2]
-  // 2: [2, highPair, lowPair, kicker]
-  // 1: [1, pair, k1, k2, k3]
-  // 0: [0, h1, h2, h3, h4, h5]
-
-  if (cat === 8) return `Straight Flush, ${VALUE_TO_NAME[score[1]]}-high`;
-  if (cat === 7) return `Four of a Kind, ${pluralRank(score[1])} (kicker ${VALUE_TO_NAME[score[2]]})`;
-  if (cat === 6) return `Full House, ${pluralRank(score[1])} full of ${pluralRank(score[2])}`;
-  if (cat === 5) return `Flush, ${VALUE_TO_NAME[score[1]]}-high`;
-  if (cat === 4) return `Straight, ${VALUE_TO_NAME[score[1]]}-high`;
-  if (cat === 3) return `Three of a Kind, ${pluralRank(score[1])} (kicker ${VALUE_TO_NAME[score[2]]})`;
-  if (cat === 2)
-    return `Two Pair, ${pluralRank(score[1])} and ${pluralRank(score[2])} (kicker ${VALUE_TO_NAME[score[3]]})`;
-  if (cat === 1) return `One Pair, ${pluralRank(score[1])} (kicker ${VALUE_TO_NAME[score[2]]})`;
-
-  // high card
-  return `High Card, ${VALUE_TO_NAME[score[1]]} (kicker ${VALUE_TO_NAME[score[2]]})`;
-}
-
-function handRankOnly(score: number[]) {
-  switch (score[0]) {
-    case 8: return "Straight Flush";
-    case 7: return "Four of a Kind";
-    case 6: return "Full House";
-    case 5: return "Flush";
-    case 4: return "Straight";
-    case 3: return "Three of a Kind";
-    case 2: return "Two Pair";
-    case 1: return "One Pair";
-    default: return "High Card";
-  }
-}
+import CardTile from './components/CardTile';
+import CardBack from './components/CardBack';
+import BetChip from './components/BetChip';
+import ConfirmModal from './components/ConfirmModal';
+import ActionPanel from './components/ActionPanel';
+import ActionLog from './components/ActionLog';
+import GameHeader from './components/GameHeader';
+import RoleScreen from './components/screens/RoleScreen';
+import StudentProfileScreen from './components/screens/StudentProfileScreen';
+import OAuthProfileScreen from './components/screens/OAuthProfileScreen';
+import StudentLoginScreen from './components/screens/StudentLoginScreen';
+import StudentDashboard from './components/screens/StudentDashboard';
+import ProfessionalDashboard from './components/screens/ProfessionalDashboard';
+import ConnectionsScreen from './components/screens/ConnectionsScreen';
+import EditProfileScreen from './components/screens/EditProfileScreen';
+import AboutScreen from './components/screens/AboutScreen';
 
 const connectButtonClass =
   "rounded-xl border border-black bg-white px-3 py-1 text-sm font-semibold text-black transition-all duration-300 hover:bg-gray-50 hover:scale-[1.02] hover:shadow-[0_10px_30px_rgba(0,0,0,0.15)]";
-
-/* ---------- UI components ---------- */
-
-const SUIT_COLOR: Record<string, string> = {
-  "♠": "text-black",
-  "♥": "text-red-600",
-  "♦": "text-blue-600",
-  "♣": "text-green-600",
-};
-
-function CardTile({ card }: { card: Card }) {
-  const colorClass = SUIT_COLOR[card.suit];
-  return (
-    <div className="relative h-24 w-16 rounded-xl border bg-white shadow-sm">
-      <div className={`absolute left-3 top-2 text-4xl font-extrabold ${colorClass}`}>
-  {card.rank}
-</div>
-      <div className={`absolute bottom-3 right-3 text-4xl font-bold ${colorClass}`}>
-  {card.suit}
-</div>
-    </div>
-  );
-}
-
-function renderActionText(text: string) {
-  return text.split(/([♠♥♦♣])/).map((part, i) => {
-    const suitClass = SUIT_COLOR[part];
-
-    if (suitClass) {
-      // Thin, crisp outline (no blur). Webkit stroke gives a continuous outline (great in Safari),
-      // and 8-direction text-shadow helps fill tiny gaps on sharp tips.
-      const outlineStyle: React.CSSProperties = {
-        WebkitTextStroke: "0.45px #fff",
-textShadow: `
-  -0.45px  0px   0 #fff,
-   0.45px  0px   0 #fff,
-   0px   -0.45px 0 #fff,
-   0px    0.45px 0 #fff,
-  -0.45px -0.45px 0 #fff,
-   0.45px -0.45px 0 #fff,
-  -0.45px  0.45px 0 #fff,
-   0.45px  0.45px 0 #fff
-`,
-      };
-
-      return (
-        <span key={i} className={suitClass} style={outlineStyle}>
-          {part}
-        </span>
-      );
-    }
-
-    return <span key={i}>{part}</span>;
-  });
-}
-
-function CardBack() {
-  return (
-    <div className="relative h-24 w-16 rounded-xl border bg-white shadow-sm">
-      <div className="absolute inset-2 rounded-lg border border-dashed opacity-40" />
-    </div>
-  );
-}
-
-function BetChip({ amount, label }: { amount: number; label?: string }) {
-  if (amount <= 0) return null;
-  return (
-    <div className="flex h-9 w-9 flex-col items-center justify-center rounded-full border bg-white text-black shadow-sm">
-      <div className="text-[11px] font-bold leading-none tabular-nums">
-        {formatBB(amount)}
-      </div>
-      <div className="mt-[1px] text-[9px] font-semibold leading-none opacity-70">
-        BB
-      </div>
-    </div>
-  );
-}
-
-function ConfirmModal({
-  open,
-  title,
-  message,
-  cancelText = "Go back",
-  confirmText = "Confirm",
-  onCancel,
-  onConfirm,
-}: {
-  open: boolean;
-  title: string;
-  message: string;
-  cancelText?: string;
-  confirmText?: string;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  if (!open) return null;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center px-6">
-      <div className="absolute inset-0 bg-black/50" onClick={onCancel} aria-hidden="true" />
-      <div className="relative w-full max-w-md min-[1536px]:max-[1650px]:max-w-[350px] rounded-3xl min-[1536px]:max-[1650px]:rounded-2xl border border-gray-300 bg-gray-100 p-6 min-[1536px]:max-[1650px]:p-4 shadow-lg">
-        <h3 className="mb-2 text-lg min-[1536px]:max-[1650px]:text-base font-bold text-gray-900">{title}</h3>
-        <p className="mb-6 min-[1536px]:max-[1650px]:mb-4 text-sm min-[1536px]:max-[1650px]:text-xs text-gray-800">{message}</p>
-
-        <div className="flex justify-end gap-3">
-          <button
-            onClick={onConfirm}
-            className="rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border px-4 py-2 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-1.5 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-gray-900 transition-colors hover:bg-gray-200"
-          >
-            {confirmText}
-          </button>
-          <button
-            onClick={onCancel}
-            className="rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border px-4 py-2 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-1.5 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-gray-900 transition-colors hover:bg-gray-200"
-          >
-            {cancelText}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 
 /* ---------- main ---------- */
@@ -921,7 +71,6 @@ export default function Home() {
   const [gameSession, setGameSession] = useState(0);
   const [sbUser, setSbUser] = useState<User | null>(null);
 
-const handNo = handId + 1; // 1-based
 
 const SB = BASE_SB; // always 0.5
 const BB = BASE_BB; // always 1
@@ -954,42 +103,41 @@ const BB = BASE_BB; // always 1
 }));
 
 const street = auth.street;
-const setStreet = (next: any) =>
+const setStreet = (next: Street | ((prev: Street) => Street)) =>
   setAuth((prev) => ({
     ...prev,
     street: typeof next === "function" ? next(prev.street) : next,
   }));
 
 const toAct = auth.toAct;
-const setToAct = (next: any) =>
+const setToAct = (next: Seat | ((prev: Seat) => Seat)) =>
   setAuth((prev) => ({
     ...prev,
     toAct: typeof next === "function" ? next(prev.toAct) : next,
   }));
 
 const actionLog = auth.actionLog;
-const setActionLog = (next: any) =>
+const setActionLog = (next: ActionLogItem[] | ((prev: ActionLogItem[]) => ActionLogItem[])) =>
   setAuth((prev) => {
     const value = typeof next === "function" ? next(prev.actionLog) : next;
     return { ...prev, actionLog: value };
   });
 
 const handResult = auth.handResult;
-const setHandResult = (next: any) =>
+const setHandResult = (next: HandResult | ((prev: HandResult) => HandResult)) =>
   setAuth((prev) => ({
     ...prev,
     handResult: typeof next === "function" ? next(prev.handResult) : next,
   }));
 
 const gameOver = auth.gameOver;
-const setGameOver = (next: any) =>
+const setGameOver = (next: boolean | ((prev: boolean) => boolean)) =>
   setAuth((prev) => ({
     ...prev,
     gameOver: typeof next === "function" ? next(prev.gameOver) : next,
   }));
 
-const endedBoardSnapshot = auth.endedBoardSnapshot;
-const setEndedBoardSnapshot = (next: any) =>
+const setEndedBoardSnapshot = (next: Street | ((prev: Street) => Street)) =>
   setAuth((prev) => ({
     ...prev,
     endedBoardSnapshot:
@@ -997,14 +145,14 @@ const setEndedBoardSnapshot = (next: any) =>
   }));
 
 const lastAggressor = auth.lastAggressor;
-const setLastAggressor = (next: any) =>
+const setLastAggressor = (next: (Seat | null) | ((prev: Seat | null) => Seat | null)) =>
   setAuth((prev) => ({
     ...prev,
     lastAggressor: typeof next === "function" ? next(prev.lastAggressor) : next,
   }));
 
 const actionsThisStreet = auth.actionsThisStreet;
-const setActionsThisStreet = (next: any) =>
+const setActionsThisStreet = (next: number | ((prev: number) => number)) =>
   setAuth((prev) => ({
     ...prev,
     actionsThisStreet:
@@ -1012,7 +160,7 @@ const setActionsThisStreet = (next: any) =>
   }));
 
 const lastToActAfterAggro = auth.lastToActAfterAggro;
-const setLastToActAfterAggro = (next: any) =>
+const setLastToActAfterAggro = (next: (Seat | null) | ((prev: Seat | null) => Seat | null)) =>
   setAuth((prev) => ({
     ...prev,
     lastToActAfterAggro:
@@ -1020,7 +168,7 @@ const setLastToActAfterAggro = (next: any) =>
   }));
 
 const sawCallThisStreet = auth.sawCallThisStreet;
-const setSawCallThisStreet = (next: any) =>
+const setSawCallThisStreet = (next: boolean | ((prev: boolean) => boolean)) =>
   setAuth((prev) => ({
     ...prev,
     sawCallThisStreet:
@@ -1028,7 +176,7 @@ const setSawCallThisStreet = (next: any) =>
   }));
 
 const lastRaiseSize = auth.lastRaiseSize;
-const setLastRaiseSize = (next: any) =>
+const setLastRaiseSize = (next: number | ((prev: number) => number)) =>
   setAuth((prev) => ({
     ...prev,
     lastRaiseSize:
@@ -1036,14 +184,13 @@ const setLastRaiseSize = (next: any) =>
   }));
 
 const checked = auth.checked;
-const setChecked = (next: any) =>
+const setChecked = (next: { top: boolean; bottom: boolean } | ((prev: { top: boolean; bottom: boolean }) => { top: boolean; bottom: boolean })) =>
   setAuth((prev) => ({
     ...prev,
     checked: typeof next === "function" ? next(prev.checked) : next,
   }));
 
-const showdownFirst = auth.showdownFirst;
-const setShowdownFirst = (next: any) =>
+const setShowdownFirst = (next: (Seat | null) | ((prev: Seat | null) => Seat | null)) =>
   setAuth((prev) => ({
     ...prev,
     showdownFirst:
@@ -1051,49 +198,49 @@ const setShowdownFirst = (next: any) =>
   }));
 
 const oppRevealed = auth.oppRevealed;
-const setOppRevealed = (next: any) =>
+const setOppRevealed = (next: boolean | ((prev: boolean) => boolean)) =>
   setAuth((prev) => ({
     ...prev,
     oppRevealed: typeof next === "function" ? next(prev.oppRevealed) : next,
   }));
 
 const youMucked = auth.youMucked;
-const setYouMucked = (next: any) =>
+const setYouMucked = (next: boolean | ((prev: boolean) => boolean)) =>
   setAuth((prev) => ({
     ...prev,
     youMucked: typeof next === "function" ? next(prev.youMucked) : next,
   }));
 
 const canShowTop = auth.canShowTop;
-const setCanShowTop = (next: any) =>
+const setCanShowTop = (next: boolean | ((prev: boolean) => boolean)) =>
   setAuth((prev) => ({
     ...prev,
     canShowTop: typeof next === "function" ? next(prev.canShowTop) : next,
   }));
 
 const canShowBottom = auth.canShowBottom;
-const setCanShowBottom = (next: any) =>
+const setCanShowBottom = (next: boolean | ((prev: boolean) => boolean)) =>
   setAuth((prev) => ({
     ...prev,
     canShowBottom: typeof next === "function" ? next(prev.canShowBottom) : next,
   }));
 
 const topShowed = auth.topShowed;
-const setTopShowed = (next: any) =>
+const setTopShowed = (next: boolean | ((prev: boolean) => boolean)) =>
   setAuth((prev) => ({
     ...prev,
     topShowed: typeof next === "function" ? next(prev.topShowed) : next,
   }));
 
 const bottomShowed = auth.bottomShowed;
-const setBottomShowed = (next: any) =>
+const setBottomShowed = (next: boolean | ((prev: boolean) => boolean)) =>
   setAuth((prev) => ({
     ...prev,
     bottomShowed: typeof next === "function" ? next(prev.bottomShowed) : next,
   }));
 
 const streetBettor = auth.streetBettor;
-const setStreetBettor = (next: any) =>
+const setStreetBettor = (next: (Seat | null) | ((prev: Seat | null) => Seat | null)) =>
   setAuth((prev) => ({
     ...prev,
     streetBettor:
@@ -1131,7 +278,7 @@ const setStreetBettor = (next: any) =>
   return "role";
 });
 
-  const [screenHistory, setScreenHistory] = useState<Screen[]>(["role"]);
+  const [, setScreenHistory] = useState<Screen[]>(["role"]);
 
   // Save screen to sessionStorage when it changes
 useEffect(() => {
@@ -1186,7 +333,6 @@ const FOUNDER_ID = 'cec95997-2f5d-4836-8fc0-c4978d0ca231';
   const [creatingAccount, setCreatingAccount] = useState(false);
   const [oauthLoading, setOauthLoading] = useState(false);
   const [editProfileReturnScreen, setEditProfileReturnScreen] = useState<Screen>("role");
-  const [pinLockoutUntil, setPinLockoutUntil] = useState<number | null>(null);
   const [isCreatingPin, setIsCreatingPin] = useState(false);
 
   const [gameId, setGameId] = useState<string | null>(null);
@@ -1217,9 +363,10 @@ const [mpState, setMpState] = useState<HostState | null>(null);
 
     const isHost = mySeat === "bottom";
   const suppressMpRef = useRef(false);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mpChannelRef = useRef<any>(null);
 
-  function applyActionFromSeat(seat: Seat, action: GameAction) {
+  function _applyActionFromSeat(seat: Seat, action: GameAction) {
     // remote actions must bypass local click gating
     if (handResult.status !== "playing") return;
     if (gameOverRef.current) return;
@@ -1242,7 +389,7 @@ const [mpState, setMpState] = useState<HostState | null>(null);
     }
   }
 
-  function applyRemoteDeal(nextCards: Card[]) {
+  function _applyRemoteDeal(nextCards: Card[]) {
     suppressMpRef.current = true;
     setCards(nextCards);
     suppressMpRef.current = false;
@@ -1310,6 +457,23 @@ const [chipsToPot, setChipsToPot] = useState<{ id: string; from: 'hero' | 'oppon
 const [actionFlashes, setActionFlashes] = useState<{ id: string; seat: 'hero' | 'opponent'; text: string }[]>([]);
 const [potToWinner, setPotToWinner] = useState<{ id: string; target: 'hero' | 'opponent'; amount: number } | null>(null);
 const prevActionLogLenRef = useRef(0);
+
+// Sound state
+const [soundMuted, setSoundMutedState] = useState(false);
+const winSoundPlayedRef = useRef<string | null>(null);
+
+useEffect(() => {
+  const saved = sessionStorage.getItem('headsup_soundMuted');
+  if (saved === 'true') {
+    setSoundMutedState(true);
+    setSoundMuted(true);
+  }
+}, []);
+
+useEffect(() => {
+  sessionStorage.setItem('headsup_soundMuted', String(soundMuted));
+  setSoundMuted(soundMuted);
+}, [soundMuted]);
 
 // Dynamic table zoom — fits game to any screen size
 const [tableScale, setTableScale] = useState(1);
@@ -1389,18 +553,22 @@ useEffect(() => {
     // Start immediately
     setDealtCards(prev => ({ ...prev, sbCard1: true }));
     setCardsVisible(prev => ({ ...prev, sbCard1: true }));
+    playDealCard();
 
     await new Promise(r => setTimeout(r, 100));
     setDealtCards(prev => ({ ...prev, bbCard1: true }));
     setCardsVisible(prev => ({ ...prev, bbCard1: true }));
+    playDealCard();
 
     await new Promise(r => setTimeout(r, 100));
     setDealtCards(prev => ({ ...prev, sbCard2: true }));
     setCardsVisible(prev => ({ ...prev, sbCard2: true }));
+    playDealCard();
 
     await new Promise(r => setTimeout(r, 100));
     setDealtCards(prev => ({ ...prev, bbCard2: true }));
     setCardsVisible(prev => ({ ...prev, bbCard2: true }));
+    playDealCard();
 
     // After all dealing animations complete (400ms animation + slight buffer), remove animation classes
     await new Promise(r => setTimeout(r, 500));
@@ -1450,7 +618,7 @@ const [pendingOutgoing, setPendingOutgoing] = useState<Set<string>>(new Set());
 const [pendingIncoming, setPendingIncoming] = useState<Map<string, { id: string; createdAt: string }>>(new Map());
 
 // Rejection tracking state
-const [rejectionCounts, setRejectionCounts] = useState<Map<string, number>>(new Map());
+const [, setRejectionCounts] = useState<Map<string, number>>(new Map());
 const [blockedUsers, setBlockedUsers] = useState<Set<string>>(new Set());
 const [hiddenUsers, setHiddenUsers] = useState<Set<string>>(new Set());
 
@@ -1486,7 +654,7 @@ const [connectedUsers, setConnectedUsers] = useState<{
 const [unreadCounts, setUnreadCounts] = useState<Map<string, number>>(new Map());
 const [lastMessages, setLastMessages] = useState<Map<string, { text: string; createdAt: string; senderId: string }>>(new Map());
 
-async function sendConnectionRequest(recipientId: string, recipientName: string) {
+async function sendConnectionRequest(recipientId: string, _recipientName: string) {
   if (!sbUser?.id) return;
 
   // Rate limiting handled client-side
@@ -1594,7 +762,7 @@ async function handleConnectClick(recipientId: string, recipientName: string) {
   sendConnectionRequest(recipientId, recipientName);
 }
 
-async function acceptConnection(odId: string, connectionId: string, odName: string) {
+async function acceptConnection(odId: string, connectionId: string, _odName: string) {
   if (!sbUser?.id) return;
   
   // Optimistic update
@@ -1724,9 +892,9 @@ const createDailyRoom = async () => {
         },
       });
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('Failed to create video room:', err);
-    setRoomCreationError(err?.message || 'Failed to start video call');
+    setRoomCreationError(err instanceof Error ? err.message : 'Failed to start video call');
   } finally {
     setIsCreatingRoom(false);
   }
@@ -1776,6 +944,7 @@ useEffect(() => {
   // Listen for joiner's broadcast message (primary method)
   const ch = supabase.channel(`game:${gameId}`);
   
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ch.on("broadcast", { event: "mp" }, ({ payload }: any) => {
     if (payload?.event === "JOINER_READY") {
       setMultiplayerActive(true);
@@ -1817,10 +986,11 @@ useEffect(() => {
 
   // Track if we've sent our info (to avoid infinite loop)
   let sentMyInfo = false;
-  let hostController: MultiplayerHost | null = null;
-  let joinerController: MultiplayerJoiner | null = null;
+  const _hostController: MultiplayerHost | null = null;
+  const _joinerController: MultiplayerJoiner | null = null;
 
   // Set up listeners BEFORE subscribing (required for Supabase realtime)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ch.on("broadcast", { event: "mp" }, ({ payload }: any) => {
     if (!payload) return;
     if (payload.sender === (sbUser?.id ?? (isHost ? 'host' : 'joiner'))) return;
@@ -2057,7 +1227,7 @@ const handleOAuthSignIn = async (provider: 'google' | 'linkedin_oidc') => {
       alert('Sign-in failed: ' + error.message);
       setOauthLoading(false);
     }
-  } catch (e) {
+  } catch {
     alert('Sign-in failed. Please try again.');
     setOauthLoading(false);
   }
@@ -2123,7 +1293,7 @@ useEffect(() => {
           setSeatedRole("student");
           setScreen('oauthProfileCompletion');
         }
-      } catch (e) {
+      } catch {
         // Silently ignore profile fetch errors
       }
     }
@@ -2181,7 +1351,7 @@ useEffect(() => {
           setSeatedRole("student");
           setScreen('oauthProfileCompletion');
         }
-      } catch (e) {
+      } catch {
         // Silently ignore
       }
     }
@@ -2304,7 +1474,7 @@ useEffect(() => {
     }
     
     // Fetch rejection counts (where I am the requester)
-    const { data: attemptsData, error: attemptsError } = await supabase
+    const { data: attemptsData } = await supabase
       .from('connection_attempts')
       .select('*')
       .eq('requester_id', sbUser!.id);
@@ -2464,7 +1634,7 @@ useEffect(() => {
         });
       }
     })
-    .subscribe((status) => {
+    .subscribe(() => {
     });
   
   return () => {
@@ -2514,7 +1684,7 @@ useEffect(() => {
         try {
           const parsedState = JSON.parse(savedStateJson) as HostState;
           setSavedHostState(parsedState);
-        } catch (e) {
+        } catch {
           // Silently ignore parse errors
         }
       }
@@ -2526,7 +1696,7 @@ useEffect(() => {
           try {
             const parsedState = JSON.parse(savedJoinerStateJson) as HostState;
             setMpState(parsedState);
-          } catch (e) {
+          } catch {
             // Silently ignore parse errors
           }
         }
@@ -2538,7 +1708,7 @@ useEffect(() => {
         try {
           const parsedHistory = JSON.parse(savedHistoryJson);
           setHandLogHistory(parsedHistory);
-        } catch (e) {
+        } catch {
           // Silently ignore parse errors
         }
       }
@@ -2558,7 +1728,7 @@ useEffect(() => {
           try {
             const parsedState = JSON.parse(savedJoinerStateJson) as HostState;
             setMpState(parsedState);
-          } catch (e) {
+          } catch {
             // Silently ignore parse errors
           }
         }
@@ -2577,7 +1747,7 @@ useEffect(() => {
         sessionStorage.removeItem('headsup_joinerState');
         sessionStorage.removeItem('headsup_handHistory');
       }
-    } catch (e) {
+    } catch {
     } finally {
       setIsReconnecting(false);
     }
@@ -2658,12 +1828,15 @@ const displayBottomShowed = multiplayerActive && mpState ? mpState.bottomShowed 
         // All-in: 1500ms delay, Normal: 200ms delay
         await new Promise(r => setTimeout(r, isAllIn ? 1500 : 200));
         setDealtCards(prev => ({ ...prev, flop1: true }));
+        playDealCard();
 
         await new Promise(r => setTimeout(r, 100));
         setDealtCards(prev => ({ ...prev, flop2: true }));
+        playDealCard();
 
         await new Promise(r => setTimeout(r, 100));
         setDealtCards(prev => ({ ...prev, flop3: true }));
+        playDealCard();
       }
 
       if (displayStreet >= 4 && !dealtCards.turn) {
@@ -2671,6 +1844,7 @@ const displayBottomShowed = multiplayerActive && mpState ? mpState.bottomShowed 
         // All-in: 2000ms delay, Normal: 300ms delay
         await new Promise(r => setTimeout(r, isAllIn ? 2000 : 300));
         setDealtCards(prev => ({ ...prev, turn: true }));
+        playDealCard();
       }
 
       if (displayStreet >= 5 && !dealtCards.river) {
@@ -2678,6 +1852,7 @@ const displayBottomShowed = multiplayerActive && mpState ? mpState.bottomShowed 
         // All-in: 3000ms delay, Normal: 300ms delay
         await new Promise(r => setTimeout(r, isAllIn ? 3000 : 300));
         setDealtCards(prev => ({ ...prev, river: true }));
+        playDealCard();
       }
     };
 
@@ -2724,6 +1899,7 @@ const displayBottomShowed = multiplayerActive && mpState ? mpState.bottomShowed 
       // Only clear if not in a game over state
       setShowWinAnimation(null);
       setWinAmount(0);
+      winSoundPlayedRef.current = null;
     }
   }, [displayHandResult.status, displayHandResult.winner, displayHandResult.potWon, displayHandResult.message, myActualSeat, dealtCards.river, displayStreet, multiplayerActive, mpState?.gameOver, gameOver]);
 
@@ -2755,6 +1931,12 @@ const displayBottomShowed = multiplayerActive && mpState ? mpState.bottomShowed 
         setActionFlashes(prev => prev.filter(f => f.id !== entry.id));
       }, 2300);
 
+      // Sound effects for actions
+      if (/^folds/.test(text)) playFold();
+      else if (/^checks/.test(text)) playCheck();
+      else if (/^calls/.test(text)) playCall();
+      else if (/^(bets|raises)/.test(text)) playBetRaise();
+
       // Chip-to-pot only for bet/call/raise actions
       if (/^(calls|bets|raises)/.test(text)) {
         const amountMatch = entry.text.match(/([\d.]+)\s*bb/i);
@@ -2776,9 +1958,16 @@ const displayBottomShowed = multiplayerActive && mpState ? mpState.bottomShowed 
         target: showWinAnimation,
         amount: displayHandResult.potWon,
       });
+
+      const soundKey = `${handId}-${showWinAnimation}`;
+      if (winSoundPlayedRef.current !== soundKey) {
+        winSoundPlayedRef.current = soundKey;
+        if (showWinAnimation === 'hero') playWin(); else playLose();
+      }
+
       setTimeout(() => setPotToWinner(null), 700);
     }
-  }, [showWinAnimation, riverAnimationComplete, displayStreet, displayHandResult.status, displayHandResult.potWon]);
+  }, [showWinAnimation, riverAnimationComplete, displayStreet, displayHandResult.status, displayHandResult.potWon, handId]);
 
   // Refs to track previous show states
   const prevOppShowRef = useRef(false);
@@ -2832,14 +2021,10 @@ const displayBottomShowed = multiplayerActive && mpState ? mpState.bottomShowed 
 const oppBet = displayGame.bets[oppActualSeat];
   
   const amIDealer = dealerSeat === myActualSeat;
-  const myPositionLabel = amIDealer ? "SB/D" : "BB";
-  const oppPositionLabel = amIDealer ? "BB" : "SB/D";
   
   const myLabel = amIDealer ? "SB" : "BB";
   const oppLabel = amIDealer ? "BB" : "SB";
 
-  // Check if it's player's turn AND not in an all-in situation where cards are revealed
-  const isBottomTurn = seatedRole && displayToAct === mySeat && displayHandResult.status === "playing" && !displayOppRevealed;
 
   const [handStartStacks, setHandStartStacks] = useState<{ top: number; bottom: number }>({
   top: STARTING_STACK_BB,
@@ -2870,7 +2055,7 @@ async function createPinGame() {
       if (anonErr || !anonData.user) throw anonErr;
       user = anonData.user;
     }
-  } catch (e) {
+  } catch {
     alert("Could not start a guest session.");
     setCreatingGame(false);
     return;
@@ -2954,7 +2139,7 @@ async function createPinGame() {
   setCreatingGame(false);
 }
 
-async function getOrCreateUser() {
+async function _getOrCreateUser() {
   const { data, error } = await supabase.auth.getUser();
   if (!error && data.user) return data.user;
 
@@ -2990,7 +2175,7 @@ async function joinPinGame() {
         if (anonErr || !anonData.user) throw anonErr;
         user = anonData.user;
       }
-    } catch (e) {
+    } catch {
       alert("Could not start session. Check your internet and try again.");
       return;
     }
@@ -3068,7 +2253,7 @@ function clearPin() {
   setCreatingGame(false);
 }
 
-function applyRemoteReset(p: {
+function _applyRemoteReset(p: {
   dealerOffset: 0 | 1;
   gameSession: number;
   handId: number;
@@ -3125,7 +2310,7 @@ function applyRemoteReset(p: {
   setToAct(p.toAct);
   setHandStartStacks(p.handStartStacks);
   setLastRaiseSize(p.lastRaiseSize);
-  setEndedBoardSnapshot(p.endedBoardSnapshot);
+  setEndedBoardSnapshot(p.endedBoardSnapshot as Street);
   blindsPostedRef.current = p.blindsPosted;
   actionSequenceRef.current = 0;
 
@@ -3149,7 +2334,7 @@ function applyRemoteReset(p: {
     }
   }
 
-  function triggerGameOverSequence() {
+  function _triggerGameOverSequence() {
   if (gameOverRef.current) return;
 
   gameOverRef.current = true;
@@ -3293,7 +2478,7 @@ setToAct(firstToAct);
   winner: Seat | "tie",
   reason: HandEndReason,
   message: string,
-  showdownFirstOverride: Seat | null = null
+  _showdownFirstOverride: Seat | null = null
 ) {
   // Always kill any pending timers first (especially auto-next-hand)
   clearTimers();
@@ -3398,11 +2583,9 @@ setToAct(firstToAct);
 
     // Only randomize dealerOffset in single-player mode
 // In multiplayer, keep the existing dealerOffset that was set when creating the game
-let currentDealerOffset = dealerOffset;
 if (!multiplayerActive) {
   const nextDealerOffset: 0 | 1 = Math.random() < 0.5 ? 0 : 1;
   setDealerOffset(nextDealerOffset);
-  currentDealerOffset = nextDealerOffset;
 }
 
     const freshGame: GameState = {
@@ -3714,7 +2897,7 @@ useEffect(() => {
     const other: Seat = seat === "top" ? "bottom" : "top";
     return roundToHundredth(Math.max(0, displayGame.bets[other] - displayGame.bets[seat]));
   }
-  function canCheck(seat: Seat, g: GameState = gameRef.current, st: Street = streetRef.current) {
+  function canCheck(seat: Seat, g: GameState = gameRef.current, _st: Street = streetRef.current) {
   const other: Seat = seat === "top" ? "bottom" : "top";
   return roundToHundredth(g.bets[other]) === roundToHundredth(g.bets[seat]);
 }
@@ -3877,118 +3060,6 @@ if (
   endHand("tie", "showdown", `Split pot ${halfPot} BB`);
 }
 
-  function best5From7(all: Card[]) {
-  let bestScore: number[] | null = null;
-  let bestHand: Card[] = [];
-
-  for (let a = 0; a < all.length - 4; a++) {
-    for (let b = a + 1; b < all.length - 3; b++) {
-      for (let c = b + 1; c < all.length - 2; c++) {
-        for (let d = c + 1; d < all.length - 1; d++) {
-          for (let e = d + 1; e < all.length; e++) {
-            const hand = [all[a], all[b], all[c], all[d], all[e]];
-            const score = evaluate7(hand);
-            if (!bestScore || compareScore(score, bestScore) > 0) {
-              bestScore = score;
-              bestHand = hand;
-            }
-          }
-        }
-      }
-    }
-  }
-
-  return bestHand;
-}
-
-function sortBest5ForDisplay(cards: Card[]) {
-  const score = evaluate7(cards);
-  const cat = score[0];
-
-  const groups = new Map<number, Card[]>();
-  for (const c of cards) {
-    const v = RANK_TO_VALUE[c.rank];
-    const arr = groups.get(v) ?? [];
-    arr.push(c);
-    groups.set(v, arr);
-  }
-
-  const take = (v: number) => {
-    const arr = groups.get(v);
-    if (!arr || arr.length === 0) return null;
-    const c = arr.shift()!;
-    if (arr.length === 0) groups.delete(v);
-    return c;
-  };
-
-  const takeAll = (v: number) => {
-    const arr = groups.get(v) ?? [];
-    groups.delete(v);
-    return arr;
-  };
-
-  // Straight / Straight Flush: show in sequence high->low; wheel = 5-4-3-2-A
-  if (cat === 4 || cat === 8) {
-    const high = score[1];
-    const seq =
-      high === 5
-        ? [5, 4, 3, 2, 14]
-        : [high, high - 1, high - 2, high - 3, high - 4];
-
-    return seq.map((v) => take(v)!).filter(Boolean) as Card[];
-  }
-
-  // Quads
-  if (cat === 7) {
-    const quad = score[1];
-    const kicker = score[2];
-    return [...takeAll(quad), take(kicker)!].filter(Boolean) as Card[];
-  }
-
-  // Full House
-  if (cat === 6) {
-    const trips = score[1];
-    const pair = score[2];
-    return [...takeAll(trips), ...takeAll(pair)].filter(Boolean) as Card[];
-  }
-
-  // Flush (show high->low from score)
-  if (cat === 5) {
-    const vals = score.slice(1, 6);
-    return vals.map((v) => take(v)!).filter(Boolean) as Card[];
-  }
-
-  // Trips
-  if (cat === 3) {
-    const trips = score[1];
-    const kickers = score.slice(2);
-    return [...takeAll(trips), ...kickers.map((v) => take(v)!)].filter(Boolean) as Card[];
-  }
-
-  // Two Pair
-  if (cat === 2) {
-    const highPair = score[1];
-    const lowPair = score[2];
-    const kicker = score[3];
-    return [...takeAll(highPair), ...takeAll(lowPair), take(kicker)!].filter(Boolean) as Card[];
-  }
-
-  // One Pair
-  if (cat === 1) {
-    const pair = score[1];
-    const kickers = score.slice(2);
-    return [...takeAll(pair), ...kickers.map((v) => take(v)!)].filter(Boolean) as Card[];
-  }
-
-  // High Card
-  const vals = score.slice(1, 6);
-  return vals.map((v) => take(v)!).filter(Boolean) as Card[];
-}
-
-function cards5Str(cards5: Card[]) {
-  return cards5.map(cardStr).join(" ");
-}
-
   function actFold(seat: Seat) {
     if (handResult.status !== "playing") return;
 
@@ -4059,8 +3130,8 @@ setToAct(other);
   const toCallPrev = roundToHundredth(Math.max(0, otherBet - seatBet));
   const addPrev = roundToHundredth(Math.min(toCallPrev, seatStack));
 
-  let newSeatStack = roundToHundredth(Math.max(0, seatStack - addPrev));
-  let newSeatBet = roundToHundredth(seatBet + addPrev);
+  const newSeatStack = roundToHundredth(Math.max(0, seatStack - addPrev));
+  const newSeatBet = roundToHundredth(seatBet + addPrev);
 
   let newOtherStack = otherStack;
   let newOtherBet = otherBet;
@@ -4100,6 +3171,7 @@ if (
   (callerWillBeAllIn || game.stacks[bettorSeat] <= 0)
 ) {
   allInCallThisHandRef.current = true;
+  playAllIn();
 }
 
 if (street !== 0 && callerWillBeAllIn && bettor) {
@@ -4156,14 +3228,8 @@ if (street === 5 && currentFacingBet(seat)) {
   const effectiveHandId = multiplayerActive && mpState ? mpState.handId : handId;
   const effectiveHandNo = effectiveHandId + 1;
   const withinBlock = ((effectiveHandNo - 1) % GAME_CONFIG.BLINDS_INCREASE_EVERY_N_HANDS) + 1;
-  let blindNotice: string | null = null;
-  
   if (withinBlock >= GAME_CONFIG.WARNING_STARTS_AT_HAND && withinBlock <= GAME_CONFIG.BLINDS_INCREASE_EVERY_N_HANDS) {
-    const remaining = (GAME_CONFIG.BLINDS_INCREASE_EVERY_N_HANDS + 1) - withinBlock;
-    blindNotice =
-      remaining === 1
-        ? "Blinds will change next hand"
-        : `Blinds will change in ${remaining} hands`;
+    // Blind notice computed for future use
   }
   
   if (isFacing) {
@@ -4251,6 +3317,9 @@ if (street === 5 && currentFacingBet(seat)) {
     | { type: "BET_RAISE_TO"; to: number };
 
   function dispatchAction(action: GameAction) {
+  // Initialize audio on first user gesture
+  initAudio();
+
   // Prevent rapid successive clicks (fixes auto-check bug from double-clicking)
   if (actionInProgress) {
     return;
@@ -4378,7 +3447,6 @@ if (street === 5 && currentFacingBet(seat)) {
   }
 
   if (r < foldP + raiseP) {
-    const curr = g.bets.top;
     const otherBet = g.bets.bottom;
 
     const minRaiseTo = roundToHundredth(otherBet + lastRaiseSize);
@@ -4769,8 +3837,9 @@ useEffect(() => {
       table: 'messages',
       filter: `recipient_id=eq.${sbUser.id}`,
     }, (payload) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const m = payload.new as any;
-      
+
       // Only increment unread if this conversation isn't currently open
       if (selectedChatUser?.id !== m.sender_id) {
         setUnreadCounts(prev => {
@@ -4821,7 +3890,7 @@ useEffect(() => {
     }
     
     // Mark messages as read when opening conversation
-    const { data: updateData, error: updateError } = await supabase
+    const { error: updateError } = await supabase
       .from('messages')
       .update({ read: true })
       .eq('sender_id', selectedChatUser!.id)
@@ -4857,6 +3926,7 @@ useEffect(() => {
       schema: 'public',
       table: 'messages',
     }, (payload) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const m = payload.new as any;
       if ((m.sender_id === sbUser!.id && m.recipient_id === selectedChatUser!.id) ||
           (m.sender_id === selectedChatUser!.id && m.recipient_id === sbUser!.id)) {
@@ -4972,3098 +4042,54 @@ if (isReconnecting) {
 /* ---------- title screen ---------- */
 
 if (screen === "role") {
-
-  const baseButton = selectedTheme === "notebook"
-    ? "w-full px-6 font-caveat text-xl font-bold transition-all duration-200 relative"
-    : "w-full rounded-3xl border border-white/20 text-white px-6 font-semibold transition-all duration-300 hover:bg-white hover:border-white hover:text-black hover:scale-[1.02] hover:shadow-[0_20px_50px_rgba(255,255,255,0.1)] active:scale-[0.98]";
-
-  const titleBusy = creatingGame || isCreatingPin;
-  const disabledLinkClass = "opacity-40 cursor-not-allowed pointer-events-none";
-
-const createGame = async () => {
-  if (creatingGame) return;
-
-  setCreatingGame(true);
-  try {
-    clearTimers();
-    setJoinMode(false);
-    setJoinPinInput("");
-
-    await createPinGame();
-  } finally {
-    setCreatingGame(false);
-  }
-};
-
-const joinGame = () => {
-  if (isCreatingPin) return;
-
-  clearTimers();
-  setGamePin(null);
-  setJoinMode(true);
-  setJoinPinInput("");
-};
-
-  const clearPin = () => {
-  setGamePin(null);
-  setJoinMode(false);
-  setJoinPinInput("");
-};
-
-  return (
-    <main className={`relative flex min-h-screen items-center justify-center px-6 overflow-hidden ${
-      selectedTheme === "notebook"
-        ? "bg-[#f5f1e8]"
-        : "bg-gradient-to-br from-gray-900 via-black to-gray-900"
-    }`} style={selectedTheme === "notebook" ? {
-      backgroundImage: `
-        repeating-linear-gradient(
-          0deg,
-          transparent,
-          transparent 31px,
-          rgba(0,0,0,0.08) 31px,
-          rgba(0,0,0,0.08) 33px
-        ),
-        linear-gradient(90deg, rgba(255,100,100,0.15) 0px, transparent 2px),
-        linear-gradient(90deg, rgba(100,100,255,0.15) 60px, transparent 2px)
-      `,
-      backgroundSize: '100% 33px, 100% 100%, 100% 100%'
-    } : {}}>
-
-    {/* Professional theme background elements */}
-    {selectedTheme === "default" && (
-      <>
-        <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 via-purple-500/5 to-pink-500/5 animate-gradient-shift"></div>
-        <div className="absolute inset-0 opacity-[0.02]" style={{
-          backgroundImage: 'radial-gradient(circle at 1px 1px, white 1px, transparent 0)',
-          backgroundSize: '40px 40px'
-        }}></div>
-      </>
-    )}
-
-    {/* Notebook texture overlay */}
-    {selectedTheme === "notebook" && (
-      <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{
-        backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'200\' height=\'200\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noise\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'4\' /%3E%3C/filter%3E%3Crect width=\'200\' height=\'200\' filter=\'url(%23noise)\' /%3E%3C/svg%3E")',
-      }} />
-    )}
-
-    <div
-  className={`absolute top-6 right-6 flex items-center gap-4 z-10 ${
-    selectedTheme === "default" ? "animate-fade-in" : ""
-  } ${titleBusy ? "opacity-30 pointer-events-none" : ""}`}
->
- {studentProfile.firstName && studentProfile.lastName && !gamePin ? (
-  <>
-    <div className="relative">
-      <button
-        type="button"
-        onClick={() => setStudentMenuOpen((o) => !o)}
-        className="text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-white underline opacity-90 hover:opacity-100"
-      >
-        {studentProfile.firstName} {studentProfile.lastName}
-      </button>
-
-      {studentMenuOpen && (
-        <div className="absolute right-0 mt-2 w-40 min-[1536px]:max-[1650px]:w-32 rounded-xl min-[1536px]:max-[1650px]:rounded-lg border bg-white shadow-md">
-          <button
-            type="button"
-            onClick={() => {
-              setStudentMenuOpen(false);
-              setEditProfileReturnScreen("role");
-              setScreen("editProfile");
-            }}
-            className="w-full flex items-center px-4 py-2 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-1.5 text-left text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black hover:bg-gray-100"
-          >
-            Edit Profile
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setStudentMenuOpen(false);
-              resetGame();
-              setOtherStudents([]);
-              setOtherProfessionals([]);
-              setStudentProfile({
-                firstName: "",
-                lastName: "",
-                email: "",
-                password: "",
-                year: "",
-                major: "",
-                school: "",
-                company: "",
-                workTitle: "",
-                linkedinUrl: "",
-              });
-              setSeatedRole(null);
-              setScreen("role");
-            }}
-            className="w-full flex items-center px-4 py-2 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-1.5 text-left text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black hover:bg-gray-100"
-          >
-            Log out
-          </button>
-        </div>
-      )}
-    </div>
-
-    {!gamePin && (
-  <>
-    <button
-      type="button"
-      onClick={() =>
-        setScreen(
-          seatedRole === "professional"
-            ? "professionalDashboard"
-            : "dashboard"
-        )
-      }
-      className={`text-sm min-[1536px]:max-[1650px]:text-xs font-semibold ${
-        selectedTheme === "notebook"
-          ? "font-caveat text-lg text-gray-800 hover:text-[#2563eb] no-underline"
-          : "text-white underline opacity-80 hover:opacity-100"
-      }`}
-    >
-      Dashboard
-    </button>
-    <button
-      type="button"
-      onClick={() => {
-        setIsGuestBrowsing(true);
-        navigateTo("dashboard");
-      }}
-      className={`text-sm min-[1536px]:max-[1650px]:text-xs font-semibold ${
-        selectedTheme === "notebook"
-          ? "font-caveat text-lg text-gray-800 hover:text-[#dc2626] no-underline"
-          : "text-white underline opacity-80 hover:opacity-100"
-      }`}
-    >
-      Explore
-    </button>
-  </>
-)}
-
-  </>
-) : (
-  !gamePin ? (
-    <>
-      <button
-        type="button"
-        onClick={() => {
-          clearTimers();
-          navigateTo("studentLogin");
-        }}
-        className={`text-sm min-[1536px]:max-[1650px]:text-xs font-semibold ${
-          selectedTheme === "notebook"
-            ? "font-caveat text-lg text-gray-800 hover:text-[#2563eb] no-underline"
-            : "text-white underline opacity-80 hover:opacity-100"
-        }`}
-      >
-        Log in
-      </button>
-
-      <button
-        type="button"
-        onClick={() => {
-          clearTimers();
-
-          setOtherStudents([]);
-          setOtherProfessionals([]);
-
-          setSeatedRole(null);
-          navigateTo("studentProfile");
-        }}
-        className={`text-sm min-[1536px]:max-[1650px]:text-xs font-semibold ${
-          selectedTheme === "notebook"
-            ? "font-caveat text-lg text-gray-800 hover:text-[#16a34a] no-underline"
-            : "text-white underline opacity-80 hover:opacity-100"
-        }`}
-      >
-        Sign up
-      </button>
-
-      <button
-        type="button"
-        onClick={() => {
-          setIsGuestBrowsing(true);
-          navigateTo("dashboard");
-        }}
-        className={`text-sm min-[1536px]:max-[1650px]:text-xs font-semibold ${
-          selectedTheme === "notebook"
-            ? "font-caveat text-lg text-gray-800 hover:text-[#dc2626] no-underline"
-            : "text-white underline opacity-80 hover:opacity-100"
-        }`}
-      >
-        Explore
-      </button>
-
-      <button
-        type="button"
-        onClick={() => {
-          clearTimers();
-          navigateTo("about");
-        }}
-        className={`text-sm min-[1536px]:max-[1650px]:text-xs font-semibold ${
-          selectedTheme === "notebook"
-            ? "font-caveat text-lg text-gray-800 hover:text-[#ea580c] no-underline"
-            : "text-white underline opacity-80 hover:opacity-100"
-        }`}
-      >
-        About
-      </button>
-
-      {/* THEME BUTTON - Temporarily hidden, notebook theme code preserved below */}
-      {/* <div className="relative">
-        <button
-          type="button"
-          onClick={() => setThemeMenuOpen((o) => !o)}
-          className={`text-sm min-[1536px]:max-[1650px]:text-xs font-semibold ${
-            selectedTheme === "notebook"
-              ? "font-caveat text-lg text-gray-800 hover:text-[#9333ea] no-underline"
-              : "text-white underline opacity-80 hover:opacity-100"
-          }`}
-        >
-          Theme
-        </button>
-
-        {themeMenuOpen && (
-          <div className="absolute right-0 mt-2 w-56 rounded-xl border bg-white shadow-lg z-10">
-            <div className="p-2">
-              <div className="px-3 py-2 text-xs font-semibold text-gray-500 uppercase">
-                Select Theme
-              </div>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedTheme("default");
-                  setThemeMenuOpen(false);
-                }}
-                className={`w-full flex flex-col items-start px-3 py-2.5 text-left rounded-lg hover:bg-gray-100 ${
-                  selectedTheme === "default" ? "bg-gray-100" : ""
-                }`}
-              >
-                <span className="text-sm font-semibold text-black">Default</span>
-                <span className="text-xs text-gray-500">Simple black & white</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedTheme("notebook");
-                  setThemeMenuOpen(false);
-                }}
-                className={`w-full flex flex-col items-start px-3 py-2.5 text-left rounded-lg hover:bg-gray-100 ${
-                  selectedTheme === "notebook" ? "bg-gray-100" : ""
-                }`}
-              >
-                <span className="text-sm font-semibold text-black">Notebook</span>
-                <span className="text-xs text-gray-500">Hand-drawn infographic style</span>
-              </button>
-            </div>
-          </div>
-        )}
-      </div> */}
-    </>
-  ) : null
-)}
-
-</div>
-
-      <div className="w-full max-w-xl min-[1536px]:max-[1650px]:max-w-[450px] flex flex-col relative z-10">
-        {selectedTheme === "notebook" && (
-          <>
-            {/* Hand-drawn arrow pointing to title */}
-            <div className="absolute -left-32 top-8 text-[#2563eb] opacity-70 rotate-[-5deg]">
-              <svg width="80" height="60" viewBox="0 0 80 60" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M2 30 Q 40 25, 60 28 L 55 20 M 60 28 L 52 32" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" fill="none"/>
-              </svg>
-              <span className="text-xs font-caveat block -mt-2 ml-2">Check this out!</span>
-            </div>
-
-            {/* Coffee cup doodle */}
-            <div className="absolute -right-28 top-12 text-[#dc2626] opacity-60 rotate-[8deg]">
-              <svg width="40" height="50" viewBox="0 0 40 50" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M8 15 Q 8 12, 10 10 L 30 10 Q 32 12, 32 15 L 30 35 Q 30 38, 27 40 L 13 40 Q 10 38, 10 35 Z" stroke="currentColor" strokeWidth="2" fill="none"/>
-                <path d="M32 20 L 36 20 Q 38 20, 38 23 L 38 27 Q 38 30, 36 30 L 32 30" stroke="currentColor" strokeWidth="2" fill="none"/>
-                <path d="M12 45 L 28 45" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"/>
-              </svg>
-            </div>
-          </>
-        )}
-
-        <h1 className={`mb-3 min-[1536px]:max-[1650px]:mb-2 text-center font-bold relative ${
-          selectedTheme === "notebook"
-            ? "text-6xl min-[1536px]:max-[1650px]:text-5xl font-permanent-marker text-[#1e40af] transform -rotate-1"
-            : "text-5xl min-[1536px]:max-[1650px]:text-4xl text-white tracking-tight animate-slide-up"
-        }`}>
-          {selectedTheme === "notebook" && (
-            <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-64 h-3 bg-yellow-200 opacity-40 -rotate-1 -z-10"></span>
-          )}
-          HeadsUp
-        </h1>
-
-        <p className={`mb-12 min-[1536px]:max-[1650px]:mb-8 text-center relative ${
-          selectedTheme === "notebook"
-            ? "text-lg min-[1536px]:max-[1650px]:text-base font-caveat text-gray-700 leading-relaxed px-8"
-            : "text-base min-[1536px]:max-[1650px]:text-sm text-white/60 leading-relaxed max-w-md mx-auto animate-slide-up-delay-1"
-        }`}>
-          {selectedTheme === "notebook" ? (
-            <>
-              <span className="inline-block transform -rotate-1">Making coffee chats more</span>
-              <br />
-              <span className="inline-block transform rotate-1">memorable & engaging through</span>
-              <br />
-              <span className="inline-block">structured interaction</span>
-            </>
-          ) : (
-            "Making coffee chats more memorable and engaging through structured interaction."
-          )}
-        </p>
-
-      <div className="h-[220px] min-[1536px]:max-[1650px]:h-[180px] flex flex-col justify-start">
-
-    {/* CREATE GAME PIN VIEW */}
-{gamePin && !joinMode && (
-  <div className="flex flex-col items-center gap-6 relative">
-    {selectedTheme === "notebook" && (
-      <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 text-[#dc2626] font-caveat text-sm rotate-[-3deg]">
-        Share this PIN! ↓
-      </div>
-    )}
-    <div className={`${
-      selectedTheme === "notebook"
-        ? "text-3xl font-permanent-marker text-[#2563eb] px-8 py-4 relative"
-        : "text-lg min-[1536px]:max-[1650px]:text-sm font-semibold tabular-nums text-white"
-    }`} style={selectedTheme === "notebook" ? {
-      background: 'rgba(191, 219, 254, 0.3)',
-      border: '4px solid #2563eb',
-      borderRadius: '12px 18px 15px 20px',
-      boxShadow: '4px 4px 0px rgba(37, 99, 235, 0.2)'
-    } : {}}>
-      {selectedTheme === "notebook" ? (
-        <>
-          <span className="text-lg font-caveat block mb-1 text-gray-700">Game PIN:</span>
-          <span className="font-bold tracking-wider">{gamePin}</span>
-        </>
-      ) : (
-        <>Game PIN: <span className="font-bold">{gamePin}</span></>
-      )}
-    </div>
-
-    <button
-      onClick={clearPin}
-      className={`${baseButton} ${
-        selectedTheme === "notebook"
-          ? "py-4 text-xl text-gray-700 hover:scale-105 transform rotate-[1deg]"
-          : "py-4 min-[1536px]:max-[1650px]:py-3 text-base min-[1536px]:max-[1650px]:text-xs"
-      } max-w-sm min-[1536px]:max-[1650px]:max-w-[280px]`}
-      style={selectedTheme === "notebook" ? {
-        background: 'rgba(229, 229, 229, 0.5)',
-        border: '2px solid #6b7280',
-        borderRadius: '10px 15px 12px 16px',
-        boxShadow: '2px 3px 0px rgba(107, 114, 128, 0.2)'
-      } : {}}
-    >
-      Back
-    </button>
-  </div>
-)}
-
-  {/* JOIN GAME INPUT VIEW */}
-  {!gamePin && joinMode && (
-    <div className="flex flex-col items-center gap-6 relative">
-      {selectedTheme === "notebook" && (
-        <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 text-[#16a34a] font-caveat text-sm rotate-[2deg]">
-          Enter the 4-digit PIN ↓
-        </div>
-      )}
-      <input
-        type="text"
-        inputMode="numeric"
-        maxLength={4}
-        value={joinPinInput}
-        onChange={(e) =>
-          setJoinPinInput(e.target.value.replace(/\D/g, ""))
-        }
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && joinPinInput.length === 4) {
-            joinPinGame();
-          }
-        }}
-        placeholder={selectedTheme === "notebook" ? "- - - -" : "Enter Game PIN"}
-        className={`w-full max-w-xs min-[1536px]:max-[1650px]:max-w-[224px] px-4 py-3 min-[1536px]:max-[1650px]:px-3 min-[1536px]:max-[1650px]:py-2 text-center tracking-widest tabular-nums ${
-          selectedTheme === "notebook"
-            ? "text-3xl font-permanent-marker text-[#dc2626] placeholder:text-[#dc2626]/30 bg-white/60"
-            : "rounded-xl min-[1536px]:max-[1650px]:rounded-lg border border-white text-lg min-[1536px]:max-[1650px]:text-sm text-white placeholder:text-white/50 bg-transparent"
-        }`}
-        style={selectedTheme === "notebook" ? {
-          border: '3px solid #dc2626',
-          borderRadius: '8px 12px 10px 14px',
-          boxShadow: '3px 3px 0px rgba(220, 38, 38, 0.2)'
-        } : {}}
-      />
-
-      <button
-  onClick={joinPinGame}
-  disabled={joinPinInput.length !== 4}
-  className={`${baseButton} ${
-    selectedTheme === "notebook"
-      ? "py-5 text-xl text-[#16a34a] hover:scale-105 transform rotate-[-1deg]"
-      : "py-4 min-[1536px]:max-[1650px]:py-3 text-base min-[1536px]:max-[1650px]:text-xs"
-  } max-w-sm min-[1536px]:max-[1650px]:max-w-[280px] ${
-    joinPinInput.length !== 4 ? "opacity-50 pointer-events-none" : ""
-  }`}
-  style={selectedTheme === "notebook" ? {
-    background: 'rgba(134, 239, 172, 0.3)',
-    border: '3px solid #16a34a',
-    borderRadius: '12px 16px 14px 18px',
-    boxShadow: '3px 4px 0px rgba(22, 163, 74, 0.2)'
-  } : {}}
->
-  Join game
-</button>
-
-<button
-  onClick={clearPin}
-  className={`${baseButton} ${
-    selectedTheme === "notebook"
-      ? "py-4 text-xl text-gray-700 hover:scale-105 transform rotate-[1deg]"
-      : "py-4 min-[1536px]:max-[1650px]:py-3 text-base min-[1536px]:max-[1650px]:text-xs"
-  } max-w-sm min-[1536px]:max-[1650px]:max-w-[280px]`}
-  style={selectedTheme === "notebook" ? {
-    background: 'rgba(229, 229, 229, 0.5)',
-    border: '2px solid #6b7280',
-    borderRadius: '10px 15px 12px 16px',
-    boxShadow: '2px 3px 0px rgba(107, 114, 128, 0.2)'
-  } : {}}
->
-  Back
-</button>
-    </div>
-  )}
-
-  {/* DEFAULT TITLE SCREEN BUTTONS */}
-  {!gamePin && !joinMode && (
-    <div className={`flex flex-col gap-5 ${selectedTheme === "default" ? "animate-slide-up-delay-2" : "gap-6"}`}>
-      <button
-  type="button"
-  onClick={createGame}
-  disabled={creatingGame}
-  className={`
-    ${baseButton}
-    ${selectedTheme === "notebook"
-      ? "py-8 text-2xl text-[#16a34a] hover:scale-105 transform rotate-[-1deg]"
-      : "py-10 min-[1536px]:max-[1650px]:py-7 text-xl min-[1536px]:max-[1650px]:text-base bg-gradient-to-r from-white/5 to-white/10 backdrop-blur-sm"
-    }
-    ${creatingGame
-      ? "opacity-60 cursor-not-allowed pointer-events-none"
-      : ""}
-  `}
-  style={selectedTheme === "notebook" ? {
-    background: 'rgba(134, 239, 172, 0.2)',
-    border: '3px solid #16a34a',
-    borderRadius: '15px 20px 18px 22px',
-    boxShadow: '3px 4px 0px rgba(22, 163, 74, 0.3)'
-  } : {}}
->
-  {creatingGame ? "Creating..." : "Create Game"}
-</button>
-
-      <button
-  onClick={joinGame}
-  disabled={creatingGame}
-  className={`
-    ${baseButton}
-    ${selectedTheme === "notebook"
-      ? "py-8 text-2xl text-[#dc2626] hover:scale-105 transform rotate-[1deg]"
-      : "py-10 min-[1536px]:max-[1650px]:py-7 text-xl min-[1536px]:max-[1650px]:text-base bg-gradient-to-r from-white/5 to-white/10 backdrop-blur-sm"
-    }
-    ${creatingGame ? "opacity-60 cursor-not-allowed pointer-events-none" : ""}
-  `}
-  style={selectedTheme === "notebook" ? {
-    background: 'rgba(252, 165, 165, 0.2)',
-    border: '3px solid #dc2626',
-    borderRadius: '18px 15px 22px 17px',
-    boxShadow: '3px 4px 0px rgba(220, 38, 38, 0.3)'
-  } : {}}
->
-  Join Game
-</button>
-    </div>
-  )}
-</div>
-      </div>
-
-      <div className={`absolute bottom-4 left-0 right-0 flex justify-center gap-4 z-10 ${
-        selectedTheme === "notebook" ? "font-caveat text-sm text-gray-400" : "text-xs text-white/30"
-      }`}>
-        <a href="/privacy" className="hover:underline">Privacy Policy</a>
-        <span>|</span>
-        <a href="/terms" className="hover:underline">Terms of Service</a>
-      </div>
-    </main>
-  );
+  return <RoleScreen {...{clearTimers, createPinGame, creatingGame, game, gamePin, isCreatingPin, joinMode, joinPinGame, joinPinInput, navigateTo, resetGame, screen, seatedRole, selectedTheme, setCreatingGame, setEditProfileReturnScreen, setGamePin, setIsGuestBrowsing, setJoinMode, setJoinPinInput, setOtherProfessionals, setOtherStudents, setScreen, setSeatedRole, setSelectedTheme, setStudentMenuOpen, setStudentProfile, setThemeMenuOpen, studentMenuOpen, studentProfile, themeMenuOpen}} />;
 }
 
 
 /* ---------- Sign Up setup ---------- */
 
 if (screen === "studentProfile") {
-  return (
-    <main className={`relative flex min-h-screen items-center justify-center px-6 min-[1536px]:max-[1650px]:scale-[0.85] min-[1536px]:max-[1650px]:origin-center overflow-hidden ${
-      selectedTheme === "notebook"
-        ? "bg-[#f5f1e8]"
-        : "bg-gradient-to-br from-gray-900 via-black to-gray-900"
-    }`} style={selectedTheme === "notebook" ? {
-      backgroundImage: `
-        repeating-linear-gradient(
-          0deg,
-          transparent,
-          transparent 31px,
-          rgba(0,0,0,0.08) 31px,
-          rgba(0,0,0,0.08) 33px
-        ),
-        linear-gradient(90deg, rgba(255,100,100,0.15) 0px, transparent 2px),
-        linear-gradient(90deg, rgba(100,100,255,0.15) 60px, transparent 2px)
-      `,
-      backgroundSize: '100% 33px, 100% 100%, 100% 100%'
-    } : {}}>
-
-      {selectedTheme === "default" && (
-        <>
-          <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 via-purple-500/5 to-pink-500/5 animate-gradient-shift"></div>
-          <div className="absolute inset-0 opacity-[0.02]" style={{
-            backgroundImage: 'radial-gradient(circle at 1px 1px, white 1px, transparent 0)',
-            backgroundSize: '40px 40px'
-          }}></div>
-        </>
-      )}
-
-      {selectedTheme === "notebook" && (
-        <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{
-          backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'200\' height=\'200\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noise\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'4\' /%3E%3C/filter%3E%3Crect width=\'200\' height=\'200\' filter=\'url(%23noise)\' /%3E%3C/svg%3E")',
-        }} />
-      )}
-
-      <div className={`w-full max-w-md relative z-10 ${selectedTheme === "default" ? "animate-slide-up" : ""}`}>
-        <h1 className={`mb-6 text-center font-bold ${
-          selectedTheme === "notebook"
-            ? "text-4xl font-permanent-marker text-[#1e40af] transform -rotate-1"
-            : "text-3xl text-white tracking-tight"
-        }`}>
-          {selectedTheme === "notebook" && (
-            <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-32 h-3 bg-yellow-200 opacity-40 -rotate-1 -z-10"></span>
-          )}
-          Sign up
-        </h1>
-
-        <div className="flex flex-col gap-3 mb-4">
-          <button
-            type="button"
-            disabled={oauthLoading}
-            onClick={() => handleOAuthSignIn('google')}
-            className={`flex items-center justify-center gap-3 px-4 py-3 text-sm font-semibold transition-colors disabled:opacity-50 ${
-              selectedTheme === "notebook"
-                ? "font-caveat text-lg text-gray-700 hover:bg-blue-50"
-                : "rounded-2xl border border-white/40 text-white hover:bg-white hover:text-black"
-            }`}
-            style={selectedTheme === "notebook" ? {
-              border: '2px solid #9ca3af',
-              borderRadius: '8px 12px 10px 14px',
-            } : {}}
-          >
-            <svg className="w-5 h-5" viewBox="0 0 24 24">
-              <path fill={selectedTheme === "notebook" ? "#4285F4" : "currentColor"} d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/>
-              <path fill={selectedTheme === "notebook" ? "#34A853" : "currentColor"} d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-              <path fill={selectedTheme === "notebook" ? "#FBBC05" : "currentColor"} d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-              <path fill={selectedTheme === "notebook" ? "#EA4335" : "currentColor"} d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-            </svg>
-            {oauthLoading ? 'Redirecting...' : 'Continue with Google'}
-          </button>
-
-          <button
-            type="button"
-            disabled={oauthLoading}
-            onClick={() => handleOAuthSignIn('linkedin_oidc')}
-            className={`flex items-center justify-center gap-3 px-4 py-3 text-sm font-semibold transition-colors disabled:opacity-50 ${
-              selectedTheme === "notebook"
-                ? "font-caveat text-lg text-gray-700 hover:bg-blue-50"
-                : "rounded-2xl border border-white/40 text-white hover:bg-white hover:text-black"
-            }`}
-            style={selectedTheme === "notebook" ? {
-              border: '2px solid #9ca3af',
-              borderRadius: '8px 12px 10px 14px',
-            } : {}}
-          >
-            <svg className="w-5 h-5" viewBox="0 0 24 24" fill={selectedTheme === "notebook" ? "#0A66C2" : "currentColor"}>
-              <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 0 1-2.063-2.065 2.064 2.064 0 1 1 2.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/>
-            </svg>
-            {oauthLoading ? 'Redirecting...' : 'Continue with LinkedIn'}
-          </button>
-        </div>
-
-        <div className="flex items-center gap-3 mb-6">
-          <div className={`flex-1 h-px ${selectedTheme === "notebook" ? "bg-gray-300" : "bg-white/20"}`}></div>
-          <span className={`text-xs ${selectedTheme === "notebook" ? "font-caveat text-sm text-gray-400" : "text-white/40"}`}>or sign up with email</span>
-          <div className={`flex-1 h-px ${selectedTheme === "notebook" ? "bg-gray-300" : "bg-white/20"}`}></div>
-        </div>
-
-<fieldset disabled={creatingAccount} className={creatingAccount ? "opacity-50" : ""}>
-<div className="mb-6 flex gap-3">
-  <button
-  type="button"
-  disabled={creatingAccount}
-  onClick={() => setSeatedRole("student")}
-  className={`flex-1 px-4 py-3 text-sm font-semibold transition-all duration-300 ${
-    selectedTheme === "notebook"
-      ? `font-caveat text-lg ${seatedRole === "student" ? "bg-blue-100 text-[#2563eb]" : "text-gray-700"}`
-      : `rounded-2xl border border-white/20 text-white hover:scale-[1.02] ${seatedRole === "student" ? "bg-white/10 border-white" : ""}`
-  } ${
-    creatingAccount ? "opacity-50 cursor-not-allowed" : selectedTheme === "default" ? "hover:bg-white hover:text-black" : "hover:bg-blue-50"
-  }`}
-  style={selectedTheme === "notebook" ? {
-    border: seatedRole === "student" ? '2px solid #2563eb' : '2px solid #9ca3af',
-    borderRadius: '8px 12px 10px 14px',
-    boxShadow: seatedRole === "student" ? '2px 2px 0px rgba(37, 99, 235, 0.2)' : 'none'
-  } : {}}
->
-  Student
-</button>
-
-  <button
-  type="button"
-  disabled={creatingAccount}
-  onClick={() => setSeatedRole("professional")}
-  className={`flex-1 px-4 py-3 text-sm font-semibold transition-all duration-300 ${
-    selectedTheme === "notebook"
-      ? `font-caveat text-lg ${seatedRole === "professional" ? "bg-green-100 text-[#16a34a]" : "text-gray-700"}`
-      : `rounded-2xl border border-white/20 text-white hover:scale-[1.02] ${seatedRole === "professional" ? "bg-white/10 border-white" : ""}`
-  } ${
-    creatingAccount ? "opacity-50 cursor-not-allowed" : selectedTheme === "default" ? "hover:bg-white hover:text-black" : "hover:bg-green-50"
-  }`}
-  style={selectedTheme === "notebook" ? {
-    border: seatedRole === "professional" ? '2px solid #16a34a' : '2px solid #9ca3af',
-    borderRadius: '10px 8px 14px 10px',
-    boxShadow: seatedRole === "professional" ? '2px 2px 0px rgba(22, 163, 74, 0.2)' : 'none'
-  } : {}}
->
-  Professional
-</button>
-</div>
-
-        <div className="flex flex-col gap-4">
-          <input
-            type="text"
-            placeholder="First name"
-            value={studentProfile.firstName}
-            onChange={(e) =>
-              setStudentProfile({ ...studentProfile, firstName: e.target.value })
-            }
-            className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
-          />
-
-          <input
-            type="text"
-            placeholder="Last name"
-            value={studentProfile.lastName}
-            onChange={(e) =>
-              setStudentProfile({ ...studentProfile, lastName: e.target.value })
-            }
-            className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
-          />
-
-          <input
-  type="email"
-  placeholder="Email"
-  value={studentProfile.email}
-  onChange={(e) =>
-    setStudentProfile({ ...studentProfile, email: e.target.value })
-  }
-  className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
-/>
-
-<div className="relative">
-  <input
-    type={showPassword ? "text" : "password"}
-    placeholder="Password"
-    value={studentProfile.password}
-    onChange={(e) =>
-      setStudentProfile({ ...studentProfile, password: e.target.value })
-    }
-    className="w-full rounded-xl border border-white px-4 py-3 text-sm pr-12 text-white placeholder:text-white/50 bg-transparent"
-  />
-  <button
-    type="button"
-    onClick={() => setShowPassword(!showPassword)}
-    className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-white/60 hover:text-white"
-  >
-    {showPassword ? "Hide" : "Show"}
-  </button>
-</div>
-
-{seatedRole === "student" && (
-  <>
-    <input
-      type="text"
-      placeholder="School"
-      value={studentProfile.school}
-      onChange={(e) =>
-        setStudentProfile({ ...studentProfile, school: e.target.value })
-      }
-      className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
-    />
-
-    <input
-      type="text"
-      placeholder="LinkedIn URL (optional)"
-      value={studentProfile.linkedinUrl}
-      onChange={(e) =>
-        setStudentProfile({ ...studentProfile, linkedinUrl: e.target.value })
-      }
-      className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
-    />
-
-    <select
-      value={studentProfile.year}
-      onChange={(e) =>
-        setStudentProfile({ ...studentProfile, year: e.target.value })
-      }
-      className="w-full rounded-xl border border-white px-4 py-3 text-sm appearance-none bg-transparent text-white cursor-pointer"
-    >
-      <option value="" disabled className="bg-black text-white">Year</option>
-      <option value="1" className="bg-black text-white">1</option>
-      <option value="2" className="bg-black text-white">2</option>
-      <option value="3" className="bg-black text-white">3</option>
-      <option value="4" className="bg-black text-white">4</option>
-      <option value="Other" className="bg-black text-white">Other</option>
-    </select>
-
-    <input
-      type="text"
-      placeholder="Major"
-      value={studentProfile.major}
-      onChange={(e) =>
-        setStudentProfile({ ...studentProfile, major: e.target.value })
-      }
-      className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
-    />
-  </>
-)}
-
-{seatedRole === "professional" && (
-  <>
-    <input
-      type="text"
-      placeholder="Company"
-      value={studentProfile.company || ""}
-      onChange={(e) =>
-        setStudentProfile({ ...studentProfile, company: e.target.value })
-      }
-      className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
-    />
-
-    <input
-      type="text"
-      placeholder="Work title"
-      value={studentProfile.workTitle || ""}
-      onChange={(e) =>
-        setStudentProfile({ ...studentProfile, workTitle: e.target.value })
-      }
-      className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
-    />
-
-    <input
-      type="text"
-      placeholder="School"
-      value={studentProfile.school || ""}
-      onChange={(e) =>
-        setStudentProfile({ ...studentProfile, school: e.target.value })
-      }
-      className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
-    />
-
-    <input
-      type="text"
-      placeholder="LinkedIn URL (optional)"
-      value={studentProfile.linkedinUrl}
-      onChange={(e) =>
-        setStudentProfile({ ...studentProfile, linkedinUrl: e.target.value })
-      }
-      className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
-    />
-  </>
-)}
-
-         <button
-  type="button"
-  disabled={creatingAccount || !seatedRole || !studentProfile.email || !studentProfile.password || !studentProfile.firstName || !studentProfile.lastName}
-  onClick={async () => {
-    setCreatingAccount(true);
-    
-    // === EMAIL VALIDATION ===
-    const emailValidation = validateEmail(studentProfile.email);
-    if (!emailValidation.valid) {
-      alert(emailValidation.error);
-      recordRateLimitAttempt('SIGNUP');
-      setCreatingAccount(false);
-      return;
-    }
-    
-    // === PASSWORD VALIDATION ===
-    const passwordValidation = validatePassword(studentProfile.password);
-    if (!passwordValidation.valid) {
-      alert(passwordValidation.errors[0]);
-      recordRateLimitAttempt('SIGNUP');
-      setCreatingAccount(false);
-      return;
-    }
-    
-    // === PROFILE VALIDATION (schema-based, rejects unexpected fields) ===
-    const profileValidation = validateProfileData({
-      firstName: studentProfile.firstName,
-      lastName: studentProfile.lastName,
-      email: studentProfile.email,
-      year: studentProfile.year,
-      major: studentProfile.major,
-      school: studentProfile.school,
-      company: studentProfile.company,
-      workTitle: studentProfile.workTitle,
-      linkedinUrl: studentProfile.linkedinUrl,
-    });
-    
-    if (!profileValidation.valid) {
-      const firstError = Object.values(profileValidation.errors)[0];
-      alert(firstError || 'Please check your input');
-      recordRateLimitAttempt('SIGNUP');
-      setCreatingAccount(false);
-      return;
-    }
-    
-    // Record attempt before API call
-    recordRateLimitAttempt('SIGNUP');
-    
-    try {
-      const sanitizedProfile = profileValidation.sanitized;
-      
-      // Create auth user (no email verification required)
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: emailValidation.sanitized,
-        password: studentProfile.password,
-      });
-      
-      if (authError) {
-        alert('Sign up failed: ' + authError.message);
-        setCreatingAccount(false);
-        return;
-      }
-      
-      if (!authData.user) {
-        alert('Sign up failed. Please try again.');
-        setCreatingAccount(false);
-        return;
-      }
-      
-      // Create profile immediately (no email verification wait)
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .insert({
-          id: authData.user.id,
-          email: emailValidation.sanitized,
-          first_name: toTitleCase(sanitizedProfile.firstName),
-          last_name: toTitleCase(sanitizedProfile.lastName),
-          role: seatedRole,
-          year: seatedRole === 'student' ? sanitizedProfile.year : null,
-          major: seatedRole === 'student' ? toTitleCase(sanitizedProfile.major) : null,
-          school: sanitizedProfile.school || null,
-          company: seatedRole === 'professional' ? sanitizedProfile.company : null,
-          work_title: seatedRole === 'professional' ? sanitizedProfile.workTitle : null,
-          linkedin_url: sanitizedProfile.linkedinUrl || null,
-        });
-      
-      if (profileError) {
-        alert('Profile creation failed. Please try again.');
-        setCreatingAccount(false);
-        return;
-      }
-
-      alert("Profile created successfully.");
-      
-      // Success - reset rate limit and update state
-      resetRateLimit('SIGNUP');
-
-      // Keep user signed in with their profile info
-      setStudentProfile({
-        firstName: toTitleCase(sanitizedProfile.firstName),
-        lastName: toTitleCase(sanitizedProfile.lastName),
-        email: emailValidation.sanitized,
-        password: '',
-        year: seatedRole === 'student' ? sanitizedProfile.year : '',
-        major: seatedRole === 'student' ? toTitleCase(sanitizedProfile.major) : '',
-        school: sanitizedProfile.school || '',
-        company: seatedRole === 'professional' ? sanitizedProfile.company : '',
-        workTitle: seatedRole === 'professional' ? sanitizedProfile.workTitle : '',
-        linkedinUrl: sanitizedProfile.linkedinUrl || '',
-      });
-      
-      // Navigate to title screen (user is now signed in)
-      setScreen("role");
-      
-    } catch (e) {
-      alert('Sign up failed. Please try again.');
-    } finally {
-      setCreatingAccount(false);
-    }
-  }}
-
-  className={`mt-4 rounded-2xl border border-white text-white px-4 py-3 text-sm font-semibold transition-colors ${
-    !creatingAccount && seatedRole && studentProfile.email && studentProfile.password && studentProfile.firstName && studentProfile.lastName ? "hover:bg-gray-50 hover:text-black" : "opacity-50 cursor-not-allowed"
-  }`}
->
-  {creatingAccount ? "Creating account..." : "Continue"}
-</button>
-
-          <button
-            type="button"
-            disabled={creatingAccount}
-            onClick={() => {
-              setStudentProfile({
-                firstName: "",
-                lastName: "",
-                email: "",
-                password: "",
-                year: "",
-                major: "",
-                school: "",
-                company: "",
-                workTitle: "",
-                linkedinUrl: "",
-              });
-              setSeatedRole(null);
-              goBack();
-            }}
-            className={`rounded-2xl border border-white text-white px-4 py-3 text-sm font-semibold transition-colors ${creatingAccount ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-50 hover:text-black"}`}
-          >
-            Go back
-          </button>
-        </div>
-</fieldset>
-      </div>
-    </main>
-  );
+  return <StudentProfileScreen {...{auth, creatingAccount, goBack, handleOAuthSignIn, oauthLoading, screen, seatedRole, selectedTheme, setCreatingAccount, setScreen, setSeatedRole, setShowPassword, setStudentProfile, showPassword, studentProfile}} />;
 }
 
 /* ---------- OAuth profile completion ---------- */
 
 if (screen === "oauthProfileCompletion") {
-  return (
-    <main className={`relative flex min-h-screen items-center justify-center px-6 min-[1536px]:max-[1650px]:scale-[0.85] min-[1536px]:max-[1650px]:origin-center overflow-hidden ${
-      selectedTheme === "notebook"
-        ? "bg-[#f5f1e8]"
-        : "bg-gradient-to-br from-gray-900 via-black to-gray-900"
-    }`} style={selectedTheme === "notebook" ? {
-      backgroundImage: `
-        repeating-linear-gradient(0deg, transparent, transparent 31px, rgba(0,0,0,0.08) 31px, rgba(0,0,0,0.08) 33px),
-        linear-gradient(90deg, rgba(255,100,100,0.15) 0px, transparent 2px),
-        linear-gradient(90deg, rgba(100,100,255,0.15) 60px, transparent 2px)
-      `,
-      backgroundSize: '100% 33px, 100% 100%, 100% 100%'
-    } : {}}>
-
-      {selectedTheme === "default" && (
-        <>
-          <div className="absolute inset-0 bg-gradient-to-r from-blue-500/5 via-purple-500/5 to-pink-500/5 animate-gradient-shift" />
-          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-blue-900/20 via-transparent to-transparent" />
-        </>
-      )}
-
-      {selectedTheme === "notebook" && (
-        <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{
-          backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'200\' height=\'200\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noise\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'4\' /%3E%3C/filter%3E%3Crect width=\'200\' height=\'200\' filter=\'url(%23noise)\' /%3E%3C/svg%3E")',
-        }} />
-      )}
-
-      <div className={`w-full max-w-md relative z-10 ${selectedTheme === "default" ? "animate-slide-up" : ""}`}>
-        <h1 className={`mb-6 text-center font-bold ${
-          selectedTheme === "notebook"
-            ? "text-4xl font-permanent-marker text-[#1e40af] transform -rotate-1"
-            : "text-3xl text-white tracking-tight"
-        }`}>
-          {selectedTheme === "notebook" && (
-            <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-48 h-3 bg-yellow-200 opacity-40 -rotate-1 -z-10"></span>
-          )}
-          Complete Your Profile
-        </h1>
-
-<fieldset disabled={creatingAccount} className={creatingAccount ? "opacity-50" : ""}>
-<div className="mb-6 flex gap-3">
-  <button
-    type="button"
-    disabled={creatingAccount}
-    onClick={() => setSeatedRole("student")}
-    className={`flex-1 px-4 py-3 text-sm font-semibold transition-all duration-300 ${
-      selectedTheme === "notebook"
-        ? `font-caveat text-lg ${seatedRole === "student" ? "bg-blue-100 text-[#2563eb]" : "text-gray-700"}`
-        : `rounded-2xl border border-white/20 text-white hover:scale-[1.02] ${seatedRole === "student" ? "bg-white/10 border-white" : ""}`
-    } ${
-      creatingAccount ? "opacity-50 cursor-not-allowed" : selectedTheme === "default" ? "hover:bg-white hover:text-black" : "hover:bg-blue-50"
-    }`}
-    style={selectedTheme === "notebook" ? {
-      border: seatedRole === "student" ? '2px solid #2563eb' : '2px solid #9ca3af',
-      borderRadius: '8px 12px 10px 14px',
-      boxShadow: seatedRole === "student" ? '2px 2px 0px rgba(37, 99, 235, 0.2)' : 'none'
-    } : {}}
-  >
-    Student
-  </button>
-
-  <button
-    type="button"
-    disabled={creatingAccount}
-    onClick={() => setSeatedRole("professional")}
-    className={`flex-1 px-4 py-3 text-sm font-semibold transition-all duration-300 ${
-      selectedTheme === "notebook"
-        ? `font-caveat text-lg ${seatedRole === "professional" ? "bg-green-100 text-[#16a34a]" : "text-gray-700"}`
-        : `rounded-2xl border border-white/20 text-white hover:scale-[1.02] ${seatedRole === "professional" ? "bg-white/10 border-white" : ""}`
-    } ${
-      creatingAccount ? "opacity-50 cursor-not-allowed" : selectedTheme === "default" ? "hover:bg-white hover:text-black" : "hover:bg-green-50"
-    }`}
-    style={selectedTheme === "notebook" ? {
-      border: seatedRole === "professional" ? '2px solid #16a34a' : '2px solid #9ca3af',
-      borderRadius: '8px 12px 10px 14px',
-      boxShadow: seatedRole === "professional" ? '2px 2px 0px rgba(22, 163, 74, 0.2)' : 'none'
-    } : {}}
-  >
-    Professional
-  </button>
-</div>
-
-        <div className="flex flex-col gap-4">
-          <input
-            type="text"
-            placeholder="First name"
-            value={studentProfile.firstName}
-            onChange={(e) =>
-              setStudentProfile({ ...studentProfile, firstName: e.target.value })
-            }
-            className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
-          />
-
-          <input
-            type="text"
-            placeholder="Last name"
-            value={studentProfile.lastName}
-            onChange={(e) =>
-              setStudentProfile({ ...studentProfile, lastName: e.target.value })
-            }
-            className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
-          />
-
-{seatedRole === "student" && (
-  <>
-    <input
-      type="text"
-      placeholder="School"
-      value={studentProfile.school}
-      onChange={(e) =>
-        setStudentProfile({ ...studentProfile, school: e.target.value })
-      }
-      className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
-    />
-
-    <input
-      type="text"
-      placeholder="LinkedIn URL (optional)"
-      value={studentProfile.linkedinUrl}
-      onChange={(e) =>
-        setStudentProfile({ ...studentProfile, linkedinUrl: e.target.value })
-      }
-      className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
-    />
-
-    <select
-      value={studentProfile.year}
-      onChange={(e) =>
-        setStudentProfile({ ...studentProfile, year: e.target.value })
-      }
-      className="w-full rounded-xl border border-white px-4 py-3 text-sm appearance-none bg-transparent text-white cursor-pointer"
-    >
-      <option value="" disabled className="bg-black text-white">Year</option>
-      <option value="1" className="bg-black text-white">1</option>
-      <option value="2" className="bg-black text-white">2</option>
-      <option value="3" className="bg-black text-white">3</option>
-      <option value="4" className="bg-black text-white">4</option>
-      <option value="Other" className="bg-black text-white">Other</option>
-    </select>
-
-    <input
-      type="text"
-      placeholder="Major"
-      value={studentProfile.major}
-      onChange={(e) =>
-        setStudentProfile({ ...studentProfile, major: e.target.value })
-      }
-      className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
-    />
-  </>
-)}
-
-{seatedRole === "professional" && (
-  <>
-    <input
-      type="text"
-      placeholder="Company"
-      value={studentProfile.company || ""}
-      onChange={(e) =>
-        setStudentProfile({ ...studentProfile, company: e.target.value })
-      }
-      className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
-    />
-
-    <input
-      type="text"
-      placeholder="Work title"
-      value={studentProfile.workTitle || ""}
-      onChange={(e) =>
-        setStudentProfile({ ...studentProfile, workTitle: e.target.value })
-      }
-      className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
-    />
-
-    <input
-      type="text"
-      placeholder="School"
-      value={studentProfile.school || ""}
-      onChange={(e) =>
-        setStudentProfile({ ...studentProfile, school: e.target.value })
-      }
-      className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
-    />
-
-    <input
-      type="text"
-      placeholder="LinkedIn URL (optional)"
-      value={studentProfile.linkedinUrl}
-      onChange={(e) =>
-        setStudentProfile({ ...studentProfile, linkedinUrl: e.target.value })
-      }
-      className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
-    />
-  </>
-)}
-
-          <button
-            type="button"
-            disabled={creatingAccount || !seatedRole || !studentProfile.firstName || !studentProfile.lastName}
-            onClick={async () => {
-              if (!sbUser?.id || !seatedRole) return;
-              setCreatingAccount(true);
-
-              const profileValidation = validateProfileData({
-                firstName: studentProfile.firstName,
-                lastName: studentProfile.lastName,
-                email: studentProfile.email,
-                year: studentProfile.year,
-                major: studentProfile.major,
-                school: studentProfile.school,
-                company: studentProfile.company,
-                workTitle: studentProfile.workTitle,
-                linkedinUrl: studentProfile.linkedinUrl,
-              });
-
-              if (!profileValidation.valid) {
-                const firstError = Object.values(profileValidation.errors)[0];
-                alert('Validation failed: ' + (firstError || 'Please check your input'));
-                setCreatingAccount(false);
-                return;
-              }
-
-              try {
-                const sanitizedProfile = profileValidation.sanitized;
-
-                const { error: profileError } = await supabase
-                  .from('profiles')
-                  .insert({
-                    id: sbUser.id,
-                    email: sbUser.email || studentProfile.email,
-                    first_name: toTitleCase(sanitizedProfile.firstName),
-                    last_name: toTitleCase(sanitizedProfile.lastName),
-                    role: seatedRole,
-                    year: seatedRole === 'student' ? sanitizedProfile.year : null,
-                    major: seatedRole === 'student' ? toTitleCase(sanitizedProfile.major) : null,
-                    school: sanitizedProfile.school || null,
-                    company: seatedRole === 'professional' ? sanitizedProfile.company : null,
-                    work_title: seatedRole === 'professional' ? sanitizedProfile.workTitle : null,
-                    linkedin_url: sanitizedProfile.linkedinUrl || null,
-                  });
-
-                if (profileError) {
-                  alert('Profile creation failed. Please try again.');
-                  setCreatingAccount(false);
-                  return;
-                }
-
-                setStudentProfile({
-                  firstName: toTitleCase(sanitizedProfile.firstName),
-                  lastName: toTitleCase(sanitizedProfile.lastName),
-                  email: sbUser.email || studentProfile.email,
-                  password: '',
-                  year: seatedRole === 'student' ? sanitizedProfile.year : '',
-                  major: seatedRole === 'student' ? toTitleCase(sanitizedProfile.major) : '',
-                  school: sanitizedProfile.school || '',
-                  company: seatedRole === 'professional' ? sanitizedProfile.company : '',
-                  workTitle: seatedRole === 'professional' ? sanitizedProfile.workTitle : '',
-                  linkedinUrl: sanitizedProfile.linkedinUrl || '',
-                });
-
-                setScreen('role');
-              } catch (e) {
-                alert('Profile creation failed. Please try again.');
-              } finally {
-                setCreatingAccount(false);
-              }
-            }}
-            className={`rounded-2xl border border-white text-white px-4 py-3 text-sm font-semibold transition-colors ${
-              !creatingAccount && seatedRole && studentProfile.firstName && studentProfile.lastName ? "hover:bg-gray-50 hover:text-black" : "opacity-50 cursor-not-allowed"
-            }`}
-          >
-            {creatingAccount ? "Creating profile..." : "Continue"}
-          </button>
-
-          <button
-            type="button"
-            disabled={creatingAccount}
-            onClick={async () => {
-              try {
-                await supabase.auth.signOut();
-                setSbUser(null);
-                setStudentProfile({
-                  firstName: '', lastName: '', email: '', password: '',
-                  year: '', major: '', school: '', company: '', workTitle: '', linkedinUrl: '',
-                });
-                setSeatedRole(null);
-                sessionStorage.removeItem('headsup_screen');
-                setScreen('role');
-              } catch (e) {
-                setSbUser(null);
-                sessionStorage.removeItem('headsup_screen');
-                setScreen('role');
-              }
-            }}
-            className={`rounded-2xl border border-white text-white px-4 py-3 text-sm font-semibold transition-colors ${creatingAccount ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-50 hover:text-black"}`}
-          >
-            Log out
-          </button>
-        </div>
-</fieldset>
-      </div>
-    </main>
-  );
+  return <OAuthProfileScreen {...{auth, creatingAccount, sbUser, screen, seatedRole, selectedTheme, setCreatingAccount, setSbUser, setScreen, setSeatedRole, setStudentProfile, studentProfile}} />;
 }
 
 /* ---------- student login ---------- */
 
 if (screen === "studentLogin") {
-  return (
-    <main className={`relative flex min-h-screen items-center justify-center px-6 min-[1536px]:max-[1650px]:scale-[0.85] min-[1536px]:max-[1650px]:origin-center overflow-hidden ${
-      selectedTheme === "notebook"
-        ? "bg-[#f5f1e8]"
-        : "bg-gradient-to-br from-gray-900 via-black to-gray-900"
-    }`} style={selectedTheme === "notebook" ? {
-      backgroundImage: `
-        repeating-linear-gradient(0deg, transparent, transparent 31px, rgba(0,0,0,0.08) 31px, rgba(0,0,0,0.08) 33px),
-        linear-gradient(90deg, rgba(255,100,100,0.15) 0px, transparent 2px),
-        linear-gradient(90deg, rgba(100,100,255,0.15) 60px, transparent 2px)
-      `,
-      backgroundSize: '100% 33px, 100% 100%, 100% 100%'
-    } : {}}>
-
-      {selectedTheme === "default" && (
-        <>
-          <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 via-purple-500/5 to-pink-500/5 animate-gradient-shift"></div>
-          <div className="absolute inset-0 opacity-[0.02]" style={{
-            backgroundImage: 'radial-gradient(circle at 1px 1px, white 1px, transparent 0)',
-            backgroundSize: '40px 40px'
-          }}></div>
-        </>
-      )}
-
-      {selectedTheme === "notebook" && (
-        <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{
-          backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'200\' height=\'200\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noise\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'4\' /%3E%3C/filter%3E%3Crect width=\'200\' height=\'200\' filter=\'url(%23noise)\' /%3E%3C/svg%3E")',
-        }} />
-      )}
-
-      <div className={`w-full max-w-md relative z-10 ${selectedTheme === "default" ? "animate-slide-up" : ""}`}>
-        <h1 className={`mb-6 text-center font-bold ${
-          selectedTheme === "notebook"
-            ? "text-4xl font-permanent-marker text-[#1e40af] transform -rotate-1"
-            : "text-3xl text-white tracking-tight"
-        }`}>
-          {selectedTheme === "notebook" && (
-            <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-24 h-3 bg-yellow-200 opacity-40 -rotate-1 -z-10"></span>
-          )}
-          Log in
-        </h1>
-
-        <div className="flex flex-col gap-3 mb-4">
-          <button
-            type="button"
-            disabled={oauthLoading}
-            onClick={() => handleOAuthSignIn('google')}
-            className={`flex items-center justify-center gap-3 px-4 py-3 text-sm font-semibold transition-colors disabled:opacity-50 ${
-              selectedTheme === "notebook"
-                ? "font-caveat text-lg text-gray-700 hover:bg-blue-50"
-                : "rounded-2xl border border-white/40 text-white hover:bg-white hover:text-black"
-            }`}
-            style={selectedTheme === "notebook" ? {
-              border: '2px solid #9ca3af',
-              borderRadius: '8px 12px 10px 14px',
-            } : {}}
-          >
-            <svg className="w-5 h-5" viewBox="0 0 24 24">
-              <path fill={selectedTheme === "notebook" ? "#4285F4" : "currentColor"} d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/>
-              <path fill={selectedTheme === "notebook" ? "#34A853" : "currentColor"} d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-              <path fill={selectedTheme === "notebook" ? "#FBBC05" : "currentColor"} d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-              <path fill={selectedTheme === "notebook" ? "#EA4335" : "currentColor"} d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-            </svg>
-            {oauthLoading ? 'Redirecting...' : 'Continue with Google'}
-          </button>
-
-          <button
-            type="button"
-            disabled={oauthLoading}
-            onClick={() => handleOAuthSignIn('linkedin_oidc')}
-            className={`flex items-center justify-center gap-3 px-4 py-3 text-sm font-semibold transition-colors disabled:opacity-50 ${
-              selectedTheme === "notebook"
-                ? "font-caveat text-lg text-gray-700 hover:bg-blue-50"
-                : "rounded-2xl border border-white/40 text-white hover:bg-white hover:text-black"
-            }`}
-            style={selectedTheme === "notebook" ? {
-              border: '2px solid #9ca3af',
-              borderRadius: '8px 12px 10px 14px',
-            } : {}}
-          >
-            <svg className="w-5 h-5" viewBox="0 0 24 24" fill={selectedTheme === "notebook" ? "#0A66C2" : "currentColor"}>
-              <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 0 1-2.063-2.065 2.064 2.064 0 1 1 2.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/>
-            </svg>
-            {oauthLoading ? 'Redirecting...' : 'Continue with LinkedIn'}
-          </button>
-        </div>
-
-        <div className="flex items-center gap-3 mb-4">
-          <div className={`flex-1 h-px ${selectedTheme === "notebook" ? "bg-gray-300" : "bg-white/20"}`}></div>
-          <span className={`text-xs ${selectedTheme === "notebook" ? "font-caveat text-sm text-gray-400" : "text-white/40"}`}>or</span>
-          <div className={`flex-1 h-px ${selectedTheme === "notebook" ? "bg-gray-300" : "bg-white/20"}`}></div>
-        </div>
-
-        <div className="flex flex-col gap-4">
-          <input
-            type="email"
-            placeholder="Email"
-            value={loginEmail}
-            onChange={(e) => setLoginEmail(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && loginEmail && loginPassword) {
-                document.getElementById('login-button')?.click();
-              }
-            }}
-            className="rounded-xl border border-white px-4 py-3 text-sm text-white placeholder:text-white/50 bg-transparent"
-          />
-
-          <div className="relative">
-            <input
-              type={showLoginPassword ? "text" : "password"}
-              placeholder="Password"
-              value={loginPassword}
-              onChange={(e) => setLoginPassword(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && loginEmail && loginPassword) {
-                  document.getElementById('login-button')?.click();
-                }
-              }}
-              className="w-full rounded-xl border border-white px-4 py-3 text-sm pr-12 text-white placeholder:text-white/50 bg-transparent"
-            />
-            <button
-              type="button"
-              onClick={() => setShowLoginPassword(!showLoginPassword)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-white/60 hover:text-white"
-            >
-              {showLoginPassword ? "Hide" : "Show"}
-            </button>
-          </div>
-
-          <button
-            type="button"
-            id="login-button"
-            disabled={!loginEmail || !loginPassword}
-            onClick={async () => {
-              // === INPUT VALIDATION ===
-              const emailValidation = validateEmail(loginEmail);
-              if (!emailValidation.valid) {
-                alert(emailValidation.error);
-                return;
-              }
-              
-              if (!loginPassword || loginPassword.length < 1) {
-                alert('Please enter your password');
-                return;
-              }
-              
-              try {
-                const { data, error } = await supabase.auth.signInWithPassword({
-                  email: emailValidation.sanitized,
-                  password: loginPassword,
-                });
-                
-                if (error) {
-                  alert('Invalid email or password');
-                  return;
-                }
-                
-                if (!data.user) {
-                  alert('Login failed. Please try again.');
-                  return;
-                }
-                
-                // Fetch profile to get role and details
-                const { data: profile, error: profileError } = await supabase
-                  .from('profiles')
-                  .select('*')
-                  .eq('id', data.user.id)
-                  .single();
-                
-                if (profileError || !profile) {
-                  alert('No account found. Please sign up first.');
-                  await supabase.auth.signOut();
-                  return;
-                }
-                
-                // Update local state with profile info
-                setStudentProfile({
-                  firstName: profile.first_name,
-                  lastName: profile.last_name,
-                  email: profile.email,
-                  password: '',
-                  year: profile.year || '',
-                  major: profile.major || '',
-                  school: profile.school || '',
-                  company: profile.company || '',
-                  workTitle: profile.work_title || '',
-                  linkedinUrl: profile.linkedin_url || '',
-                });
-                setSeatedRole(profile.role as Role);
-                setLoginEmail('');
-                setLoginPassword('');
-                setScreen("role");
-              } catch (e) {
-                alert('Login failed. Please try again.');
-              }
-            }}
-            className="mt-4 rounded-2xl border border-white text-white px-4 py-3 text-sm font-semibold hover:bg-gray-50 hover:text-black disabled:opacity-50"
-          >
-            Continue
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setLoginEmail('');
-              setLoginPassword('');
-              goBack();
-            }}
-            className="rounded-2xl border border-white text-white px-4 py-3 text-sm font-semibold hover:bg-gray-50 hover:text-black"
-          >
-            Go back
-          </button>
-        </div>
-      </div>
-    </main>
-  );
+  return <StudentLoginScreen {...{auth, goBack, handleOAuthSignIn, loginEmail, loginPassword, oauthLoading, screen, selectedTheme, setLoginEmail, setLoginPassword, setScreen, setSeatedRole, setShowLoginPassword, setStudentProfile, showLoginPassword}} />;
 }
 
 /* ---------- student dashboard ---------- */
 
 if (screen === "dashboard" && (seatedRole === "student" || isGuestBrowsing)) {
-  const baseButton =
-    "w-full rounded-3xl border px-6 font-semibold transition-colors duration-200 hover:bg-gray-50 hover:border-gray-300";
-
-  return (
-   <main
-      className={`flex min-h-screen justify-center px-6 pt-16 min-[1536px]:max-[1650px]:scale-[0.85] min-[1536px]:max-[1650px]:origin-center ${selectedTheme === "notebook" ? "bg-[#f5f1e8]" : "bg-gradient-to-br from-gray-900 via-black to-gray-900"}`}
-      style={selectedTheme === "notebook" ? {
-        backgroundImage: `repeating-linear-gradient(0deg, transparent, transparent 31px, rgba(0,0,0,0.08) 31px, rgba(0,0,0,0.08) 33px), linear-gradient(90deg, rgba(255,100,100,0.15) 0px, transparent 2px), linear-gradient(90deg, rgba(100,100,255,0.15) 60px, transparent 2px)`,
-        backgroundSize: '100% 33px, 100% 100%, 100% 100%'
-      } : {}}
-    >
-
-  {selectedTheme === "default" && (
-    <>
-      <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 via-purple-500/5 to-pink-500/5 animate-gradient-shift"></div>
-      <div className="absolute inset-0 opacity-[0.02]" style={{backgroundImage: 'radial-gradient(circle at 1px 1px, white 1px, transparent 0)', backgroundSize: '40px 40px'}}></div>
-    </>
-  )}
-
-  {selectedTheme === "notebook" && (
-    <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'200\' height=\'200\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noise\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'4\' /%3E%3C/filter%3E%3Crect width=\'200\' height=\'200\' filter=\'url(%23noise)\' /%3E%3C/svg%3E")'}}/>
-  )}
-
-  {/* Founder Connect Modal for guest users */}
-  {showFounderConnectModal && (
-    <div className="fixed inset-0 z-50 flex items-center justify-center px-6">
-      <div className="absolute inset-0 bg-black/50" onClick={() => setShowFounderConnectModal(false)} />
-      <div className="relative w-full max-w-md rounded-3xl border border-gray-300 bg-white p-6 shadow-lg">
-        <h3 className="mb-2 text-xl font-bold text-gray-900">Hey! 👋</h3>
-        <p className="mb-4 text-sm text-gray-700">
-          I'm Joseph. Thanks for checking this out!
-        </p>
-        <p className="mb-6 text-sm text-gray-700">
-          I'd love to connect with you personally. Drop your name and email below, and I'll reach out soon.
-        </p>
-        
-        <div className="flex flex-col gap-4">
-          <input
-            type="text"
-            placeholder="What should I call you?"
-            value={founderConnectForm.name}
-            onChange={(e) => setFounderConnectForm(prev => ({ ...prev, name: e.target.value }))}
-            className="rounded-xl border border-gray-300 px-4 py-3 text-sm text-black placeholder:text-gray-400"
-          />
-          
-          <input
-            type="email"
-            placeholder="Your email"
-            value={founderConnectForm.email}
-            onChange={(e) => setFounderConnectForm(prev => ({ ...prev, email: e.target.value }))}
-            onKeyDown={async (e) => {
-              if (e.key === 'Enter' && founderConnectForm.name && founderConnectForm.email) {
-                const nameValidation = validateInput(founderConnectForm.name, 'name', { required: true });
-                if (!nameValidation.valid) { alert(nameValidation.error); return; }
-                const emailValidation = validateEmail(founderConnectForm.email);
-                if (!emailValidation.valid) { alert(emailValidation.error); return; }
-                setFounderConnectSubmitting(true);
-                try {
-                  const { error } = await supabase.from('founder_contact_requests').insert({ name: nameValidation.sanitized, email: emailValidation.sanitized });
-if (error) { alert('Something went wrong. Please try again.'); return; }
-fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/send-founder-contact-email`, {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ name: nameValidation.sanitized, email: emailValidation.sanitized }),
-}).catch(() => {});
-alert("Thanks! I'll reach out to you soon. – Joseph");
-                  setFounderConnectSent(true);
-                  setShowFounderConnectModal(false);
-                  setFounderConnectForm({ name: '', email: '' });
-                } catch (e) { alert('Something went wrong. Please try again.'); }
-                finally { setFounderConnectSubmitting(false); }
-              }
-            }}
-            className="rounded-xl border border-gray-300 px-4 py-3 text-sm text-black placeholder:text-gray-400"
-          />
-        </div>
-        
-        <div className="mt-6 flex justify-end gap-3">
-          <button
-            onClick={() => setShowFounderConnectModal(false)}
-            className="rounded-2xl border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-100"
-          >
-            Maybe later
-          </button>
-          <button
-            onClick={async () => {
-              const nameValidation = validateInput(founderConnectForm.name, 'name', { required: true });
-              if (!nameValidation.valid) { alert(nameValidation.error); return; }
-              const emailValidation = validateEmail(founderConnectForm.email);
-              if (!emailValidation.valid) { alert(emailValidation.error); return; }
-              setFounderConnectSubmitting(true);
-              try {
-                const { error } = await supabase.from('founder_contact_requests').insert({ name: nameValidation.sanitized, email: emailValidation.sanitized });
-if (error) { alert('Something went wrong. Please try again.'); return; }
-fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/send-founder-contact-email`, {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ name: nameValidation.sanitized, email: emailValidation.sanitized }),
-}).catch(() => {});
-alert("Thanks! I'll reach out to you soon. – Joseph");
-                setFounderConnectSent(true);
-                setShowFounderConnectModal(false);
-                setFounderConnectForm({ name: '', email: '' });
-              } catch (e) { alert('Something went wrong. Please try again.'); }
-              finally { setFounderConnectSubmitting(false); }
-            }}
-            disabled={founderConnectSubmitting || !founderConnectForm.name || !founderConnectForm.email}
-            className="rounded-2xl border border-black bg-black px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-gray-800 disabled:opacity-50"
-          >
-            {founderConnectSubmitting ? 'Sending...' : 'Connect with Joseph'}
-          </button>
-        </div>
-      </div>
-    </div>
-  )}
-  <div className={`w-full max-w-[96rem] relative z-10 ${selectedTheme === "default" ? "animate-slide-up" : ""}`}>
-       <div className="mb-2 flex items-center justify-center gap-4">
-  <h1 className={`text-3xl font-bold relative ${selectedTheme === "notebook" ? "font-permanent-marker text-[#1e40af] transform -rotate-1" : "text-white tracking-tight"}`}>
-    {selectedTheme === "notebook" && (
-      <span className="absolute -inset-2 bg-yellow-200/40 -z-10 transform rotate-1 rounded"></span>
-    )}
-    {isGuestBrowsing ? "Explore the community" : "Student dashboard"}
-  </h1>
-
-  {isGuestBrowsing ? (
-    <>
-      <button
-        type="button"
-        onClick={() => {
-          navigateTo("studentProfile");
-        }}
-        className={`rounded-xl px-4 py-1.5 text-sm font-semibold transition-all ${
-          selectedTheme === "notebook"
-            ? "border-2 border-[#1e40af] bg-[#1e40af] text-white hover:bg-[#1e3a8a] hover:border-[#1e3a8a] hover:-translate-y-0.5 hover:shadow-lg"
-            : "border border-white bg-white text-black hover:bg-gray-100"
-        }`}
-      >
-        Sign up to connect
-      </button>
-      <button
-        type="button"
-        onClick={() => {
-          setIsGuestBrowsing(false);
-          goBack();
-        }}
-        className={`rounded-xl px-4 py-1.5 text-sm font-semibold transition-all ${
-          selectedTheme === "notebook"
-            ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
-            : "border border-white text-white hover:bg-gray-50 hover:text-black"
-        }`}
-      >
-        Back
-      </button>
-    </>
-  ) : (
-    <>
-      <button
-        type="button"
-        onClick={() => {
-          setEditProfileReturnScreen("dashboard");
-          setScreen("editProfile");
-        }}
-        className={`rounded-xl px-3 py-1 text-xs font-semibold transition-all ${
-          selectedTheme === "notebook"
-            ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
-            : "border border-white text-white hover:bg-gray-50 hover:text-black"
-        }`}
-      >
-        Edit Profile
-      </button>
-
-      {/* Game PIN display */}
-      {gamePin && !joinMode && (
-        <div className="flex items-center gap-2">
-          <span className={`text-sm font-semibold ${selectedTheme === "notebook" ? "text-[#1e40af]" : "text-white"}`}>PIN: {gamePin}</span>
-          <button
-            type="button"
-            onClick={() => {
-              clearPin();
-              setGamePin(null);
-            }}
-            className={`rounded-xl px-3 py-1 text-xs font-semibold transition-all ${
-              selectedTheme === "notebook"
-                ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
-                : "border border-white text-white hover:bg-gray-50 hover:text-black"
-            }`}
-          >
-            Cancel
-          </button>
-        </div>
-      )}
-
-      {/* Join game input */}
-      {joinMode && !gamePin && (
-        <div className="flex items-center gap-2">
-          <input
-            type="text"
-            inputMode="numeric"
-            maxLength={4}
-            value={joinPinInput}
-            onChange={(e) => setJoinPinInput(e.target.value.replace(/\D/g, ""))}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && joinPinInput.length === 4) {
-                joinPinGame();
-              }
-            }}
-            placeholder="Enter PIN"
-            className={`w-24 rounded-lg px-2 py-1 text-center text-sm tracking-widest bg-transparent ${
-              selectedTheme === "notebook"
-                ? "border-2 border-[#1e40af] text-[#1e40af] placeholder:text-[#1e40af]/50"
-                : "border border-white text-white placeholder:text-white/50"
-            }`}
-          />
-          <button
-            type="button"
-            onClick={() => joinPinGame()}
-            disabled={joinPinInput.length !== 4}
-            className={`rounded-xl px-3 py-1 text-xs font-semibold transition-all disabled:opacity-50 ${
-              selectedTheme === "notebook"
-                ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
-                : "border border-white text-white hover:bg-gray-50 hover:text-black"
-            }`}
-          >
-            Join
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setJoinMode(false);
-              setJoinPinInput("");
-            }}
-            className={`rounded-xl px-3 py-1 text-xs font-semibold transition-all ${
-              selectedTheme === "notebook"
-                ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
-                : "border border-white text-white hover:bg-gray-50 hover:text-black"
-            }`}
-          >
-            Cancel
-          </button>
-        </div>
-      )}
-
-      {/* Create/Join buttons (shown when no PIN and not joining) */}
-      {!gamePin && !joinMode && (
-        <>
-          <button
-            type="button"
-            onClick={async () => {
-              setCreatingGame(true);
-              await createPinGame();
-              setCreatingGame(false);
-            }}
-            disabled={creatingGame}
-            className={`rounded-xl px-3 py-1 text-xs font-semibold transition-all disabled:opacity-50 ${
-              selectedTheme === "notebook"
-                ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
-                : "border border-white text-white hover:bg-gray-50 hover:text-black"
-            }`}
-          >
-            {creatingGame ? "Creating..." : "Create Game"}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setJoinMode(true);
-              setJoinPinInput("");
-            }}
-            className={`rounded-xl px-3 py-1 text-xs font-semibold transition-all ${
-              selectedTheme === "notebook"
-                ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
-                : "border border-white text-white hover:bg-gray-50 hover:text-black"
-            }`}
-          >
-            Join Game
-          </button>
-        </>
-      )}
-
-      <button
-        type="button"
-        onClick={() => setScreen("connections")}
-        className={`relative rounded-xl px-4 py-1.5 text-sm font-semibold transition-all ${
-          selectedTheme === "notebook"
-            ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
-            : "border border-white text-white hover:bg-gray-50 hover:text-black"
-        }`}
-      >
-        Connections
-        {Array.from(unreadCounts.values()).reduce((a, b) => a + b, 0) > 0 && (
-          <span className={`absolute -top-2 -right-2 flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold ${
-            selectedTheme === "notebook"
-              ? "bg-yellow-200 border-2 border-[#1e40af] text-[#1e40af]"
-              : "bg-white border border-black text-black"
-          }`}>
-            {Array.from(unreadCounts.values()).reduce((a, b) => a + b, 0) > 9 ? '9+' : Array.from(unreadCounts.values()).reduce((a, b) => a + b, 0)}
-          </span>
-        )}
-      </button>
-      <button
-        type="button"
-        onClick={() => {
-          if (gamePin || multiplayerActive) {
-            setShowTitleScreenConfirm(true);
-          } else {
-            setScreen("role");
-          }
-        }}
-        className={`rounded-xl px-4 py-1.5 text-sm font-semibold transition-all ${
-          selectedTheme === "notebook"
-            ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
-            : "border border-white text-white hover:bg-gray-50 hover:text-black"
-        }`}
-      >
-        Title screen
-      </button>
-    </>
-  )}
-</div>
-
-        <p className={`mb-8 text-center text-sm ${selectedTheme === "notebook" ? "text-[#1e40af]/60" : "text-black/60"}`}>
-          Same aesthetic for now — we'll plug in real widgets next.
-        </p>
-
-        <div className="grid gap-4">
-          <div className="rounded-3xl border bg-white p-6 w-full px-10">
-
-  <div className="grid grid-cols-2 gap-6">
-  <div className="text-xs font-semibold uppercase tracking-wide text-black/50">
-  Other students
-</div>
-
-<div className="text-xs font-semibold uppercase tracking-wide text-black/50">
-  Professionals
-</div>
-
-    {/* ---------- Students column ---------- */}
-    
-    <div className="flex flex-col gap-3">
-  <button
-    className="w-full rounded-2xl border border-black bg-white px-5 py-4 font-semibold text-black transition-colors hover:bg-gray-50"
-  >
-    View Students
-  </button>
-
-  <div className="max-h-[70vh] overflow-y-auto pr-4 flex flex-col gap-3">
-    {/* Your own profile card */}
-    {!isGuestBrowsing && (
-    <div className="w-full rounded-2xl border border-black bg-white px-5 py-4 font-semibold text-black flex items-center justify-between">
-      <span>
-        {studentProfile.linkedinUrl ? (
-          <a
-            href={studentProfile.linkedinUrl.match(/^https?:\/\/(www\.)?linkedin\.com/) ? studentProfile.linkedinUrl : `https://linkedin.com/in/`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-blue-600 hover:underline"
-          >
-            {studentProfile.firstName} {studentProfile.lastName}
-          </a>
-        ) : (
-          <>{studentProfile.firstName} {studentProfile.lastName}</>
-        )}
-        {" • "}
-        {studentProfile.year} {" • "}
-        {studentProfile.major} {studentProfile.school ? ` • ${studentProfile.school}` : ''}
-      </span>
-    </div>
-    )}
-
-    {otherStudents
-      .filter(s => !hiddenUsers.has(s.id))
-      .sort((a, b) => {
-        // For guest browsing, always keep founder at top
-        if (isGuestBrowsing) {
-          if (a.id === FOUNDER_ID) return -1;
-          if (b.id === FOUNDER_ID) return 1;
-          return 0; // Keep original order for non-founder
-        }
-        // For logged-in users, sort by connection priority
-        const aPriority = getConnectionSortPriority(a.id, myConnections, pendingOutgoing, pendingIncoming);
-        const bPriority = getConnectionSortPriority(b.id, myConnections, pendingOutgoing, pendingIncoming);
-        return aPriority - bPriority;
-      })
-      .map((s, i) => (
-  <div
-    key={i}
-    className="w-full rounded-2xl border border-black bg-white px-5 py-4 font-semibold text-black flex items-center justify-between animate-slide-up"
-    style={{ animationDelay: `${i * 0.05}s` }}
-  >
-    <span>
-      {s.linkedinUrl ? (
-        <a
-          href={s.linkedinUrl.startsWith('http') ? s.linkedinUrl : `https://${s.linkedinUrl}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-blue-600 hover:underline"
-            >
-          {s.firstName} {s.lastName}
-        </a>
-      ) : (
-        <>{s.firstName} {s.lastName}</>
-      )}
-      {" • "}
-      {s.year} {" • "}
-      {s.major}{s.school ? ` • ${s.school}` : ''}
-    </span>
-
-    {/* Show connect button for founder when guest browsing */}
-    {isGuestBrowsing && s.id === FOUNDER_ID && (
-      founderConnectSent ? (
-        <span className="text-sm text-gray-500">Pending</span>
-      ) : (
-        <button 
-          className={connectButtonClass}
-          onClick={() => setShowFounderConnectModal(true)}
-        >
-          Connect
-        </button>
-      )
-    )}
-    {/* Hide all buttons for guests (except founder above) */}
-    {!isGuestBrowsing && (
-      myConnections.has(s.id) ? (
-        <span className="text-sm text-green-600 font-semibold">Connected</span>
-      ) : pendingOutgoing.has(s.id) ? (
-        <span className="text-sm text-gray-500">Pending</span>
-      ) : pendingIncoming.has(s.id) ? (
-        <div className="flex gap-2">
-          <button 
-            onClick={() => acceptConnection(s.id, pendingIncoming.get(s.id)!.id, `${s.firstName} ${s.lastName}`)}
-            className="rounded-xl border border-green-600 bg-green-50 px-3 py-1.5 text-sm font-semibold text-green-600 transition-all duration-300 hover:bg-green-100 hover:scale-[1.02] hover:shadow-[0_10px_30px_rgba(22,163,74,0.2)]"
-          >
-            Accept
-          </button>
-          <button 
-            onClick={() => rejectConnection(s.id, pendingIncoming.get(s.id)!.id, `${s.firstName} ${s.lastName}`)}
-            className="rounded-xl border border-red-600 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-600 transition-all duration-300 hover:bg-red-100 hover:scale-[1.02] hover:shadow-[0_10px_30px_rgba(220,38,38,0.2)]"
-          >
-            Reject
-          </button>
-        </div>
-      ) : blockedUsers.has(s.id) ? null : (
-        <button 
-          className={connectButtonClass}
-          onClick={() => handleConnectClick(s.id, `${s.firstName} ${s.lastName}`)}
-        >
-          Connect
-        </button>
-      )
-    )}
-  </div>
-))}
-  </div>
-</div>
-
-    {/* ---------- Professionals column ---------- */}
-    
-    <div className="flex flex-col gap-3">
-  <button
-    className="w-full rounded-2xl border border-black bg-white px-5 py-4 font-semibold text-black transition-colors hover:bg-gray-50"
-  >
-    View Professionals
-  </button>
-
-  <div className="max-h-[70vh] overflow-y-auto pr-4 flex flex-col gap-3">
-    {otherProfessionals
-      .filter(p => !hiddenUsers.has(p.id))
-      .sort((a, b) => {
-        const aPriority = getConnectionSortPriority(a.id, myConnections, pendingOutgoing, pendingIncoming);
-        const bPriority = getConnectionSortPriority(b.id, myConnections, pendingOutgoing, pendingIncoming);
-        return aPriority - bPriority;
-      })
-      .map((p, i) => (
-  <div
-    key={i}
-    className="w-full rounded-2xl border border-black bg-white px-5 py-[13px] font-semibold text-black flex items-center justify-between animate-slide-up"
-    style={{ animationDelay: `${i * 0.05}s` }}
-  >
-    <span>
-      {p.linkedinUrl ? (
-        <a
-          href={p.linkedinUrl.startsWith('http') ? p.linkedinUrl : `https://${p.linkedinUrl}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-blue-600 hover:underline"
-        >
-          {p.firstName} {p.lastName}
-        </a>
-      ) : (
-        <>{p.firstName} {p.lastName}</>
-      )}
-      {" • "}
-      {p.company} {" • "}
-      {p.workTitle}{p.school ? ` • ${p.school}` : ''}
-    </span>
-
-    {isGuestBrowsing ? null : myConnections.has(p.id) ? (
-      <span className="text-sm text-green-600 font-semibold">Connected</span>
-    ) : pendingOutgoing.has(p.id) ? (
-      <span className="text-sm text-gray-500">Pending</span>
-    ) : pendingIncoming.has(p.id) ? (
-      <div className="flex gap-2">
-        <button 
-          onClick={() => acceptConnection(p.id, pendingIncoming.get(p.id)!.id, `${p.firstName} ${p.lastName}`)}
-          className="rounded-xl border border-green-600 bg-green-50 px-3 py-1.5 text-sm font-semibold text-green-600 hover:bg-green-100"
-        >
-          Accept
-        </button>
-        <button 
-          onClick={() => rejectConnection(p.id, pendingIncoming.get(p.id)!.id, `${p.firstName} ${p.lastName}`)}
-          className="rounded-xl border border-red-600 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-600 hover:bg-red-100"
-        >
-          Reject
-        </button>
-      </div>
-    ) : blockedUsers.has(p.id) ? null : (
-      <button 
-        className={connectButtonClass}
-        onClick={() => handleConnectClick(p.id, `${p.firstName} ${p.lastName}`)}
-      >
-        Connect
-      </button>
-    )}
-  </div>
-))}
-
-  </div>
-</div>
-
-  </div>
-</div>
-
-        </div>
-      </div>
-
-<ConfirmModal
-  open={showConnectConfirm}
-  title="Send connection request?"
-  message={`This user has previously declined your connection request. Would you like to send another request to ${connectConfirmUser?.name || 'this user'}?`}
-  cancelText="Go back"
-  confirmText="Send request"
-  onCancel={() => {
-    setShowConnectConfirm(false);
-    setConnectConfirmUser(null);
-  }}
-  onConfirm={() => {
-    if (connectConfirmUser) {
-      sendConnectionRequest(connectConfirmUser.id, connectConfirmUser.name);
-    }
-    setShowConnectConfirm(false);
-    setConnectConfirmUser(null);
-  }}
-/>
-
-    </main>
-  );
+  return <StudentDashboard {...{acceptConnection, blockedUsers, clearPin, connectButtonClass, connectConfirmUser, createPinGame, creatingGame, FOUNDER_ID, founderConnectForm, founderConnectSent, founderConnectSubmitting, game, gamePin, goBack, handleConnectClick, hiddenUsers, isGuestBrowsing, joinMode, joinPinGame, joinPinInput, multiplayerActive, myConnections, navigateTo, otherProfessionals, otherStudents, pendingIncoming, pendingOutgoing, rejectConnection, screen, selectedTheme, sendConnectionRequest, setConnectConfirmUser, setCreatingGame, setEditProfileReturnScreen, setFounderConnectForm, setFounderConnectSent, setFounderConnectSubmitting, setGamePin, setIsGuestBrowsing, setJoinMode, setJoinPinInput, setScreen, setShowConnectConfirm, setShowFounderConnectModal, setShowTitleScreenConfirm, showConnectConfirm, showFounderConnectModal, studentProfile, unreadCounts}} />;
 }
 
 /* ---------- professional dashboard ---------- */
 
 if (screen === "professionalDashboard" && seatedRole === "professional") {
-  const baseButton =
-    "w-full rounded-3xl border px-6 font-semibold transition-colors duration-200 hover:bg-gray-50 hover:border-gray-300";
-
-  return (
-   <main
-      className={`flex min-h-screen justify-center px-6 pt-16 min-[1536px]:max-[1650px]:scale-[0.85] min-[1536px]:max-[1650px]:origin-center ${selectedTheme === "notebook" ? "bg-[#f5f1e8]" : "bg-gradient-to-br from-gray-900 via-black to-gray-900"}`}
-      style={selectedTheme === "notebook" ? {
-        backgroundImage: `repeating-linear-gradient(0deg, transparent, transparent 31px, rgba(0,0,0,0.08) 31px, rgba(0,0,0,0.08) 33px), linear-gradient(90deg, rgba(255,100,100,0.15) 0px, transparent 2px), linear-gradient(90deg, rgba(100,100,255,0.15) 60px, transparent 2px)`,
-        backgroundSize: '100% 33px, 100% 100%, 100% 100%'
-      } : {}}
-    >
-
-  {selectedTheme === "default" && (
-    <>
-      <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 via-purple-500/5 to-pink-500/5 animate-gradient-shift"></div>
-      <div className="absolute inset-0 opacity-[0.02]" style={{backgroundImage: 'radial-gradient(circle at 1px 1px, white 1px, transparent 0)', backgroundSize: '40px 40px'}}></div>
-    </>
-  )}
-
-  {selectedTheme === "notebook" && (
-    <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'200\' height=\'200\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noise\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'4\' /%3E%3C/filter%3E%3Crect width=\'200\' height=\'200\' filter=\'url(%23noise)\' /%3E%3C/svg%3E")'}}/>
-  )}
-
-  <div className={`w-full max-w-[96rem] relative z-10 ${selectedTheme === "default" ? "animate-slide-up" : ""}`}>
-       <div className="mb-2 flex items-center justify-center gap-4">
-  <h1 className={`text-3xl font-bold relative ${selectedTheme === "notebook" ? "font-permanent-marker text-[#1e40af] transform -rotate-1" : "text-white tracking-tight"}`}>
-    {selectedTheme === "notebook" && (
-      <span className="absolute -inset-2 bg-yellow-200/40 -z-10 transform rotate-1 rounded"></span>
-    )}
-    Professional Dashboard
-  </h1>
-
-  <button
-    type="button"
-    onClick={() => {
-      setEditProfileReturnScreen("professionalDashboard");
-      setScreen("editProfile");
-    }}
-    className={`rounded-xl px-3 py-1 text-xs font-semibold transition-all ${
-      selectedTheme === "notebook"
-        ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
-        : "border border-white text-white hover:bg-gray-50 hover:text-black"
-    }`}
-  >
-    Edit Profile
-  </button>
-
-  {/* Game PIN display */}
-  {gamePin && !joinMode && (
-    <div className="flex items-center gap-2">
-      <span className={`text-sm font-semibold ${selectedTheme === "notebook" ? "text-[#1e40af]" : "text-white"}`}>PIN: {gamePin}</span>
-      <button
-        type="button"
-        onClick={() => {
-          clearPin();
-          setGamePin(null);
-        }}
-        className={`rounded-xl px-3 py-1 text-xs font-semibold transition-all ${
-          selectedTheme === "notebook"
-            ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
-            : "border border-white text-white hover:bg-gray-50 hover:text-black"
-        }`}
-      >
-        Cancel
-      </button>
-    </div>
-  )}
-
-  {/* Join game input */}
-  {joinMode && !gamePin && (
-    <div className="flex items-center gap-2">
-      <input
-        type="text"
-        inputMode="numeric"
-        maxLength={4}
-        value={joinPinInput}
-        onChange={(e) => setJoinPinInput(e.target.value.replace(/\D/g, ""))}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && joinPinInput.length === 4) {
-            joinPinGame();
-          }
-        }}
-        placeholder="Enter PIN"
-        className={`w-24 rounded-lg px-2 py-1 text-center text-sm tracking-widest bg-transparent ${
-          selectedTheme === "notebook"
-            ? "border-2 border-[#1e40af] text-[#1e40af] placeholder:text-[#1e40af]/50"
-            : "border border-white text-white placeholder:text-white/50"
-        }`}
-      />
-      <button
-        type="button"
-        onClick={() => joinPinGame()}
-        disabled={joinPinInput.length !== 4}
-        className={`rounded-xl px-3 py-1 text-xs font-semibold transition-all disabled:opacity-50 ${
-          selectedTheme === "notebook"
-            ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
-            : "border border-white text-white hover:bg-gray-50 hover:text-black"
-        }`}
-      >
-        Join
-      </button>
-      <button
-        type="button"
-        onClick={() => {
-          setJoinMode(false);
-          setJoinPinInput("");
-        }}
-        className={`rounded-xl px-3 py-1 text-xs font-semibold transition-all ${
-          selectedTheme === "notebook"
-            ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
-            : "border border-white text-white hover:bg-gray-50 hover:text-black"
-        }`}
-      >
-        Cancel
-      </button>
-    </div>
-  )}
-
-  {/* Create/Join buttons (shown when no PIN and not joining) */}
-  {!gamePin && !joinMode && (
-    <>
-      <button
-        type="button"
-        onClick={async () => {
-          setCreatingGame(true);
-          await createPinGame();
-          setCreatingGame(false);
-        }}
-        disabled={creatingGame}
-        className={`rounded-xl px-3 py-1 text-xs font-semibold transition-all disabled:opacity-50 ${
-          selectedTheme === "notebook"
-            ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
-            : "border border-white text-white hover:bg-gray-50 hover:text-black"
-        }`}
-      >
-        {creatingGame ? "Creating..." : "Create Game"}
-      </button>
-      <button
-        type="button"
-        onClick={() => {
-          setJoinMode(true);
-          setJoinPinInput("");
-        }}
-        className={`rounded-xl px-3 py-1 text-xs font-semibold transition-all ${
-          selectedTheme === "notebook"
-            ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
-            : "border border-white text-white hover:bg-gray-50 hover:text-black"
-        }`}
-      >
-        Join Game
-      </button>
-    </>
-  )}
-
-  <button
-    type="button"
-    onClick={() => setScreen("connections")}
-    className={`relative rounded-xl px-4 py-1.5 text-sm font-semibold transition-all ${
-      selectedTheme === "notebook"
-        ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
-        : "border border-white text-white hover:bg-gray-50 hover:text-black"
-    }`}
-  >
-    Connections
-    {Array.from(unreadCounts.values()).reduce((a, b) => a + b, 0) > 0 && (
-      <span className={`absolute -top-2 -right-2 flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold ${
-        selectedTheme === "notebook"
-          ? "bg-yellow-200 border-2 border-[#1e40af] text-[#1e40af]"
-          : "bg-white border border-black text-black"
-      }`}>
-        {Array.from(unreadCounts.values()).reduce((a, b) => a + b, 0) > 9 ? '9+' : Array.from(unreadCounts.values()).reduce((a, b) => a + b, 0)}
-      </span>
-    )}
-  </button>
-  <button
-    type="button"
-    onClick={() => {
-      if (gamePin || multiplayerActive) {
-        setShowTitleScreenConfirm(true);
-      } else {
-        setScreen("role");
-      }
-    }}
-    className={`rounded-xl px-4 py-1.5 text-sm font-semibold transition-all ${
-      selectedTheme === "notebook"
-        ? "border-2 border-[#1e40af] bg-transparent text-[#1e40af] hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
-        : "border border-white text-white hover:bg-gray-50 hover:text-black"
-    }`}
-  >
-    Title screen
-  </button>
-</div>
-
-        <p className={`mb-8 text-center text-sm ${selectedTheme === "notebook" ? "text-[#1e40af]/60" : "text-black/60"}`}>
-          Same aesthetic for now — we'll plug in real widgets next.
-        </p>
-
-        <div className="grid gap-4">
-          <div className="rounded-3xl border bg-white p-6 w-full px-10">
-
-  <div className="grid grid-cols-2 gap-6">
-  <div className="text-xs font-semibold uppercase tracking-wide text-black/50">
-  Other Professionals
-</div>
-
-<div className="text-xs font-semibold uppercase tracking-wide text-black/50">
-  Students
-</div>
-
-    {/* ---------- ProfD Professionals column ---------- */}
-<div className="flex flex-col gap-3">
-  <button
-    className="w-full rounded-2xl border border-black bg-white px-5 py-4 font-semibold text-black transition-colors hover:bg-gray-50"
-  >
-    View Professionals
-  </button>
-
-  <div className="max-h-[70vh] overflow-y-auto pr-2 flex flex-col gap-3">
-    {/* Your own profile card */}
-    <div className="w-full rounded-2xl border border-black bg-white px-5 py-4 font-semibold text-black flex items-center justify-between">
-      <span>
-        {studentProfile.linkedinUrl ? (
-          <a
-            href={studentProfile.linkedinUrl.startsWith('http') ? studentProfile.linkedinUrl : `https://${studentProfile.linkedinUrl}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-blue-600 hover:underline"
-          >
-            {studentProfile.firstName} {studentProfile.lastName}
-          </a>
-        ) : (
-          <>{studentProfile.firstName} {studentProfile.lastName}</>
-        )}
-        {" • "}
-        {studentProfile.company} {" • "}
-        {studentProfile.workTitle}
-      </span>
-    </div>
-
-    {otherProfessionals
-      .filter(p => !hiddenUsers.has(p.id))
-      .sort((a, b) => {
-        const aPriority = getConnectionSortPriority(a.id, myConnections, pendingOutgoing, pendingIncoming);
-        const bPriority = getConnectionSortPriority(b.id, myConnections, pendingOutgoing, pendingIncoming);
-        return aPriority - bPriority;
-      })
-      .map((p, i) => (
-  <div
-    key={i}
-    className="w-full rounded-2xl border border-black bg-white px-5 py-[14px] font-semibold text-black flex items-center justify-between animate-slide-up"
-    style={{ animationDelay: `${i * 0.05}s` }}
-  >
-    <span>
-      {p.linkedinUrl ? (
-        <a
-          href={p.linkedinUrl.startsWith('http') ? p.linkedinUrl : `https://${p.linkedinUrl}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-blue-600 hover:underline"
-        >
-          {p.firstName} {p.lastName}
-        </a>
-      ) : (
-        <>{p.firstName} {p.lastName}</>
-      )}
-      {" • "}
-      {p.company} {" • "}
-      {p.workTitle}{p.school ? ` • ${p.school}` : ''}
-    </span>
-
-    {myConnections.has(p.id) ? (
-      <span className="text-sm text-green-600 font-semibold">Connected</span>
-    ) : pendingOutgoing.has(p.id) ? (
-      <span className="text-sm text-gray-500">Pending</span>
-    ) : pendingIncoming.has(p.id) ? (
-      <div className="flex gap-2">
-        <button 
-          onClick={() => acceptConnection(p.id, pendingIncoming.get(p.id)!.id, `${p.firstName} ${p.lastName}`)}
-          className="rounded-xl border border-green-600 bg-green-50 px-3 py-1.5 text-sm font-semibold text-green-600 hover:bg-green-100"
-        >
-          Accept
-        </button>
-        <button 
-          onClick={() => rejectConnection(p.id, pendingIncoming.get(p.id)!.id, `${p.firstName} ${p.lastName}`)}
-          className="rounded-xl border border-red-600 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-600 hover:bg-red-100"
-        >
-          Reject
-        </button>
-      </div>
-    ) : blockedUsers.has(p.id) ? null : (
-      <button 
-        className={connectButtonClass}
-        onClick={() => handleConnectClick(p.id, `${p.firstName} ${p.lastName}`)}
-      >
-        Connect
-      </button>
-    )}
-  </div>
-))}
-
-  </div>
-</div>
-
-    {/* ---------- ProfD Students column ---------- */}
-<div className="flex flex-col gap-3">
-  <button
-    className="w-full rounded-2xl border border-black bg-white px-5 py-4 font-semibold text-black transition-colors hover:bg-gray-50"
-  >
-    View Students
-  </button>
-
-  <div className="max-h-[70vh] overflow-y-auto pr-2 flex flex-col gap-3">
-    {otherStudents
-      .filter(s => !hiddenUsers.has(s.id))
-      .sort((a, b) => {
-        const aPriority = getConnectionSortPriority(a.id, myConnections, pendingOutgoing, pendingIncoming);
-        const bPriority = getConnectionSortPriority(b.id, myConnections, pendingOutgoing, pendingIncoming);
-        return aPriority - bPriority;
-      })
-      .map((s, i) => (
-  <div
-    key={i}
-    className="w-full rounded-2xl border border-black bg-white px-5 py-[13px] font-semibold text-black flex items-center justify-between animate-slide-up"
-    style={{ animationDelay: `${i * 0.05}s` }}
-  >
-    <span>
-      {s.linkedinUrl ? (
-        <a
-          href={s.linkedinUrl.startsWith('http') ? s.linkedinUrl : `https://${s.linkedinUrl}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-blue-600 hover:underline"
-            >
-          {s.firstName} {s.lastName}
-        </a>
-      ) : (
-        <>{s.firstName} {s.lastName}</>
-      )}
-      {" • "}
-      {s.year} {" • "}
-      {s.major}{s.school ? ` • ${s.school}` : ''}
-    </span>
-
-    {isGuestBrowsing ? null : myConnections.has(s.id) ? (
-      <span className="text-sm text-green-600 font-semibold">Connected</span>
-    ) : pendingOutgoing.has(s.id) ? (
-      <span className="text-sm text-gray-500">Pending</span>
-    ) : pendingIncoming.has(s.id) ? (
-      <div className="flex gap-2">
-        <button 
-          onClick={() => acceptConnection(s.id, pendingIncoming.get(s.id)!.id, `${s.firstName} ${s.lastName}`)}
-          className="rounded-xl border border-green-600 bg-green-50 px-3 py-1.5 text-sm font-semibold text-green-600 hover:bg-green-100"
-        >
-          Accept
-        </button>
-        <button 
-          onClick={() => rejectConnection(s.id, pendingIncoming.get(s.id)!.id, `${s.firstName} ${s.lastName}`)}
-          className="rounded-xl border border-red-600 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-600 hover:bg-red-100"
-        >
-          Reject
-        </button>
-      </div>
-    ) : blockedUsers.has(s.id) ? null : (
-      <button 
-        className={connectButtonClass}
-        onClick={() => handleConnectClick(s.id, `${s.firstName} ${s.lastName}`)}
-      >
-        Connect
-      </button>
-    )}
-  </div>
-))}
-
-  </div>
-</div>
-  </div>
-</div>
-
-        </div>
-      </div>
-
-<ConfirmModal
-  open={showConnectConfirm}
-  title="Send connection request?"
-  message={`This user has previously declined your connection request. Would you like to send another request to ${connectConfirmUser?.name || 'this user'}?`}
-  cancelText="Go back"
-  confirmText="Send request"
-  onCancel={() => {
-    setShowConnectConfirm(false);
-    setConnectConfirmUser(null);
-  }}
-  onConfirm={() => {
-    if (connectConfirmUser) {
-      sendConnectionRequest(connectConfirmUser.id, connectConfirmUser.name);
-    }
-    setShowConnectConfirm(false);
-    setConnectConfirmUser(null);
-  }}
-/>
-
-    </main>
-  );
+  return <ProfessionalDashboard {...{acceptConnection, blockedUsers, clearPin, connectButtonClass, connectConfirmUser, createPinGame, creatingGame, game, gamePin, handleConnectClick, hiddenUsers, isGuestBrowsing, joinMode, joinPinGame, joinPinInput, multiplayerActive, myConnections, otherProfessionals, otherStudents, pendingIncoming, pendingOutgoing, rejectConnection, screen, selectedTheme, sendConnectionRequest, setConnectConfirmUser, setCreatingGame, setEditProfileReturnScreen, setGamePin, setJoinMode, setJoinPinInput, setScreen, setShowConnectConfirm, setShowTitleScreenConfirm, showConnectConfirm, studentProfile, unreadCounts}} />;
 }
 
 if (screen === "connections") {
-  return (
-    <main className="flex h-screen justify-center bg-black px-6 py-6 overflow-hidden">
-      <div className="w-full max-w-[96rem] flex flex-col">
-        <div className="mb-4 flex items-center justify-center gap-4 shrink-0">
-          <h1 className="text-3xl font-bold text-white">Connections</h1>
-          
-          <button
-            type="button"
-            onClick={() => {
-              if (gamePin || multiplayerActive) {
-                setShowDashboardConfirm(true);
-              } else {
-                setScreen(seatedRole === "professional" ? "professionalDashboard" : "dashboard");
-              }
-            }}
-            className="rounded-xl border border-white text-white px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50 hover:text-black"
-          >
-            Dashboard
-          </button>
-         <button
-            type="button"
-            onClick={() => {
-              if (gamePin || multiplayerActive) {
-                setShowTitleScreenConfirm(true);
-              } else {
-                setScreen("role");
-              }
-            }}
-            className="rounded-xl border border-white text-white px-4 py-1.5 text-sm font-semibold transition-colors hover:bg-gray-50 hover:text-black"
-          >
-            Title screen
-          </button>
-        </div>
-        
-        <p className="mb-8 text-center text-sm text-black/60">
-          Message your connections
-        </p>
-        
-        <div className="rounded-3xl border bg-white p-6 w-full flex-1 min-h-0 overflow-hidden">
-          <div className="grid grid-cols-[350px_1fr] gap-6 h-full">
-            
-            {/* Left side - Connections list */}
-            <div className="flex flex-col border-r pr-6">
-              <div className="text-xs font-semibold uppercase tracking-wide text-black/50 mb-4">
-                Your Connections ({connectedUsers.length})
-              </div>
-              
-              <div className="flex-1 overflow-y-auto space-y-2">
-                {connectedUsers.length === 0 ? (
-                  <div className="text-sm text-black/50 text-center py-8">
-                    No connections yet. Connect with people from the Dashboard!
-                  </div>
-                ) : (
-                  connectedUsers.map((user) => {
-                    const lastMsg = lastMessages.get(user.id);
-                    const unreadCount = unreadCounts.get(user.id) || 0;
-                    
-                    // Format date like LinkedIn
-                    const formatDate = (dateStr: string) => {
-                      const date = new Date(dateStr);
-                      const now = new Date();
-                      const diffMs = now.getTime() - date.getTime();
-                      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-                      
-                      if (diffDays === 0) {
-                        return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-                      } else if (diffDays === 1) {
-                        return 'Yesterday';
-                      } else if (diffDays < 7) {
-                        return date.toLocaleDateString([], { weekday: 'short' });
-                      } else {
-                        return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
-                      }
-                    };
-                    
-                    return (
-                      <button
-                        key={user.id}
-                        onClick={() => setSelectedChatUser(user)}
-                        className={`w-full rounded-xl border px-4 py-3 text-left transition-colors hover:bg-gray-50 ${
-                          selectedChatUser?.id === user.id ? 'border-black bg-gray-50' : 'border-gray-200'
-                        }`}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <span className={`font-semibold text-black ${unreadCount > 0 ? 'font-bold' : ''}`}>
-                                {user.firstName} {user.lastName}
-                              </span>
-                              {unreadCount > 0 && (
-                                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-black text-[11px] font-bold text-white">
-                                  {unreadCount > 9 ? '9+' : unreadCount}
-                                </span>
-                              )}
-                            </div>
-                            {lastMsg ? (
-                              <div className={`text-sm truncate mt-0.5 ${unreadCount > 0 ? 'text-black font-medium' : 'text-black/60'}`}>
-                                {lastMsg.senderId === sbUser?.id ? 'You: ' : ''}{lastMsg.text}
-                              </div>
-                            ) : user.linkedinUrl ? (
-                              <div className="text-xs text-blue-600 truncate">
-                                LinkedIn connected
-                              </div>
-                            ) : null}
-                          </div>
-                          {lastMsg && (
-                            <div className={`text-xs whitespace-nowrap ${unreadCount > 0 ? 'text-black font-semibold' : 'text-black/50'}`}>
-                              {formatDate(lastMsg.createdAt)}
-                            </div>
-                          )}
-                        </div>
-                      </button>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-            
-            {/* Right side - Chat */}
-            <div className="relative h-full">
-              {!selectedChatUser ? (
-                <div className="h-full flex items-center justify-center text-black/50">
-                  Select a connection to start messaging
-                </div>
-              ) : (
-                <>
-                  {/* Chat header */}
-                  <div className="border-b pb-4 mb-4">
-                    <div className="font-bold text-lg text-black">
-                      {selectedChatUser.firstName} {selectedChatUser.lastName}
-                    </div>
-                    {selectedChatUser.linkedinUrl && (
-                      <a
-                        href={selectedChatUser.linkedinUrl.startsWith('http') ? selectedChatUser.linkedinUrl : `https://${selectedChatUser.linkedinUrl}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-sm text-blue-600 hover:underline"
-                      >
-                        View LinkedIn Profile
-                      </a>
-                    )}
-                  </div>
-                  
-                  {/* Messages - scrollable area with padding at bottom for input */}
-                  <div data-messages-container className="absolute inset-0 top-16 bottom-16 overflow-y-auto space-y-3 pr-2 flex flex-col">
-                    <div className="flex-1" />
-                    {messages.length === 0 ? (
-                      <div className="text-center text-black/50 py-8">
-                        No messages yet. Say hello!
-                      </div>
-                    ) : (
-                      messages.map((msg) => (
-                        <div
-                          key={msg.id}
-                          className={`flex ${msg.senderId === sbUser?.id ? 'justify-end' : 'justify-start'}`}
-                        >
-                          <div
-                            className={`max-w-[70%] rounded-2xl px-4 py-2 ${
-                              msg.senderId === sbUser?.id
-                                ? 'bg-black text-white'
-                                : 'bg-gray-100 text-black'
-                            }`}
-                          >
-                            <div className="text-sm">{msg.text}</div>
-                            <div className={`text-xs mt-1 ${
-                              msg.senderId === sbUser?.id ? 'text-white/60' : 'text-black/40'
-                            }`}>
-                              {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                            </div>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                  
-                  {/* Message input - fixed at bottom */}
-                  <div className="absolute bottom-0 left-0 right-0 flex gap-3 bg-white pt-3">
-                    <input
-                      type="text"
-                      value={messageInput}
-                      onChange={(e) => setMessageInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey) {
-                          e.preventDefault();
-                          sendMessage();
-                        }
-                      }}
-                      placeholder="Type a message..."
-                      className="flex-1 rounded-xl border border-gray-300 px-4 py-3 text-sm text-black focus:border-black focus:outline-none"
-                    />
-                    <button
-                      onClick={sendMessage}
-                      disabled={!messageInput.trim()}
-                      className="rounded-xl border border-black bg-black px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-gray-800 disabled:opacity-50"
-                    >
-                      Send
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-    </main>
-  );
+  return <ConnectionsScreen {...{connectedUsers, gamePin, lastMessages, messageInput, messages, multiplayerActive, sbUser, screen, seatedRole, selectedChatUser, sendMessage, setMessageInput, setScreen, setSelectedChatUser, setShowDashboardConfirm, setShowTitleScreenConfirm, unreadCounts}} />;
 }
 
   /* ---------- edit profile ---------- */
 
 if (screen === "editProfile") {
-  const inputClass = selectedTheme === "notebook"
-    ? "rounded-xl border-2 border-[#1e40af] text-[#1e40af] placeholder:text-[#1e40af]/50 bg-transparent px-4 py-3 text-sm"
-    : "rounded-xl border border-white text-white placeholder:text-white/50 bg-transparent px-4 py-3 text-sm";
-  const buttonClass = selectedTheme === "notebook"
-    ? "rounded-2xl border-2 border-[#1e40af] text-[#1e40af] px-4 py-3 text-sm font-semibold transition-all hover:bg-[#1e40af] hover:text-white hover:-translate-y-0.5 hover:shadow-lg"
-    : "rounded-2xl border border-white text-white px-4 py-3 text-sm font-semibold transition-colors hover:bg-gray-50 hover:text-black";
-  
-  const handleSaveProfile = async () => {
-    if (!sbUser?.id) return;
-    
-    // === PROFILE VALIDATION (schema-based) ===
-    const profileValidation = validateProfileData({
-      firstName: studentProfile.firstName,
-      lastName: studentProfile.lastName,
-      email: studentProfile.email,
-      year: studentProfile.year,
-      major: studentProfile.major,
-      school: studentProfile.school,
-      company: studentProfile.company,
-      workTitle: studentProfile.workTitle,
-      linkedinUrl: studentProfile.linkedinUrl,
-    });
-    
-    if (!profileValidation.valid) {
-      const firstError = Object.values(profileValidation.errors)[0];
-      alert(firstError || 'Please check your input');
-      return;
-    }
-    
-    const sanitizedProfile = profileValidation.sanitized;
-    
-    setSavingProfile(true);
-    try {
-      const { error } = await supabase
-        .from('profiles')
-        .update({
-          first_name: toTitleCase(sanitizedProfile.firstName),
-          last_name: toTitleCase(sanitizedProfile.lastName),
-          year: seatedRole === 'student' ? sanitizedProfile.year : null,
-          major: seatedRole === 'student' ? toTitleCase(sanitizedProfile.major) : null,
-          school: sanitizedProfile.school || null,
-          company: seatedRole === 'professional' ? sanitizedProfile.company : null,
-          work_title: seatedRole === 'professional' ? sanitizedProfile.workTitle : null,
-          linkedin_url: sanitizedProfile.linkedinUrl || null,
-        })
-        .eq('id', sbUser.id);
-      
-      if (error) {
-        alert('Failed to save. Please try again.');
-      } else {
-        // Update local state with saved values
-        setStudentProfile({
-          ...studentProfile,
-          firstName: toTitleCase(sanitizedProfile.firstName),
-          lastName: toTitleCase(sanitizedProfile.lastName),
-          year: seatedRole === 'student' ? sanitizedProfile.year : '',
-          major: seatedRole === 'student' ? toTitleCase(sanitizedProfile.major) : '',
-          school: sanitizedProfile.school || '',
-          company: seatedRole === 'professional' ? sanitizedProfile.company : '',
-          workTitle: seatedRole === 'professional' ? sanitizedProfile.workTitle : '',
-          linkedinUrl: sanitizedProfile.linkedinUrl || '',
-        });
-        alert('Profile updated!');
-        setScreen(editProfileReturnScreen);
-      }
-    } finally {
-      setSavingProfile(false);
-    }
-  };
-
-  return (
-    <main
-      className={`relative flex min-h-screen items-center justify-center px-6 ${selectedTheme === "notebook" ? "bg-[#f5f1e8]" : "bg-gradient-to-br from-gray-900 via-black to-gray-900"}`}
-      style={selectedTheme === "notebook" ? {
-        backgroundImage: `repeating-linear-gradient(0deg, transparent, transparent 31px, rgba(0,0,0,0.08) 31px, rgba(0,0,0,0.08) 33px), linear-gradient(90deg, rgba(255,100,100,0.15) 0px, transparent 2px), linear-gradient(90deg, rgba(100,100,255,0.15) 60px, transparent 2px)`,
-        backgroundSize: '100% 33px, 100% 100%, 100% 100%'
-      } : {}}
-    >
-
-      {selectedTheme === "default" && (
-        <>
-          <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 via-purple-500/5 to-pink-500/5 animate-gradient-shift"></div>
-          <div className="absolute inset-0 opacity-[0.02]" style={{backgroundImage: 'radial-gradient(circle at 1px 1px, white 1px, transparent 0)', backgroundSize: '40px 40px'}}></div>
-        </>
-      )}
-
-      {selectedTheme === "notebook" && (
-        <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'200\' height=\'200\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noise\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'4\' /%3E%3C/filter%3E%3Crect width=\'200\' height=\'200\' filter=\'url(%23noise)\' /%3E%3C/svg%3E")'}}/>
-      )}
-
-      <div className={`w-full max-w-md relative z-10 ${selectedTheme === "default" ? "animate-slide-up" : ""}`}>
-        <h1 className={`mb-6 text-center text-3xl font-bold relative ${selectedTheme === "notebook" ? "font-permanent-marker text-[#1e40af] transform -rotate-1" : "text-white tracking-tight"}`}>
-          {selectedTheme === "notebook" && (
-            <span className="absolute -inset-2 bg-yellow-200/40 -z-10 transform rotate-1 rounded"></span>
-          )}
-          Edit Profile
-        </h1>
-
-        <div className="flex flex-col gap-4">
-          <input
-            type="text"
-            placeholder="First name"
-            value={studentProfile.firstName}
-            onChange={(e) =>
-              setStudentProfile({ ...studentProfile, firstName: e.target.value })
-            }
-            className={inputClass}
-          />
-
-          <input
-            type="text"
-            placeholder="Last name"
-            value={studentProfile.lastName}
-            onChange={(e) =>
-              setStudentProfile({ ...studentProfile, lastName: e.target.value })
-            }
-            className={inputClass}
-          />
-
-          <input
-            type="text"
-            placeholder="LinkedIn URL (optional)"
-            value={studentProfile.linkedinUrl}
-            onChange={(e) =>
-              setStudentProfile({ ...studentProfile, linkedinUrl: e.target.value })
-            }
-            className={inputClass}
-          />
-
-          {seatedRole === "student" && (
-            <>
-              <input
-                type="text"
-                placeholder="School"
-                value={studentProfile.school}
-                onChange={(e) =>
-                  setStudentProfile({ ...studentProfile, school: e.target.value })
-                }
-                className={inputClass}
-              />
-
-              <select
-                value={studentProfile.year}
-                onChange={(e) =>
-                  setStudentProfile({ ...studentProfile, year: e.target.value })
-                }
-                className={`w-full rounded-xl px-4 py-3 text-sm appearance-none bg-transparent cursor-pointer ${
-                  selectedTheme === "notebook"
-                    ? "border-2 border-[#1e40af] text-[#1e40af]"
-                    : "border border-white text-white"
-                }`}
-              >
-                <option value="" disabled className={selectedTheme === "notebook" ? "bg-[#f5f1e8] text-[#1e40af]" : "bg-black text-white"}>Year</option>
-                <option value="1" className={selectedTheme === "notebook" ? "bg-[#f5f1e8] text-[#1e40af]" : "bg-black text-white"}>1</option>
-                <option value="2" className={selectedTheme === "notebook" ? "bg-[#f5f1e8] text-[#1e40af]" : "bg-black text-white"}>2</option>
-                <option value="3" className={selectedTheme === "notebook" ? "bg-[#f5f1e8] text-[#1e40af]" : "bg-black text-white"}>3</option>
-                <option value="4" className={selectedTheme === "notebook" ? "bg-[#f5f1e8] text-[#1e40af]" : "bg-black text-white"}>4</option>
-                <option value="Other" className={selectedTheme === "notebook" ? "bg-[#f5f1e8] text-[#1e40af]" : "bg-black text-white"}>Other</option>
-              </select>
-
-              <input
-                type="text"
-                placeholder="Major"
-                value={studentProfile.major}
-                onChange={(e) =>
-                  setStudentProfile({ ...studentProfile, major: e.target.value })
-                }
-                className={inputClass}
-              />
-            </>
-          )}
-
-          {seatedRole === "professional" && (
-            <>
-              <input
-                type="text"
-                placeholder="School"
-                value={studentProfile.school}
-                onChange={(e) =>
-                  setStudentProfile({ ...studentProfile, school: e.target.value })
-                }
-                className={inputClass}
-              />
-
-              <input
-                type="text"
-                placeholder="Company"
-                value={studentProfile.company}
-                onChange={(e) =>
-                  setStudentProfile({ ...studentProfile, company: e.target.value })
-                }
-                className={inputClass}
-              />
-
-              <input
-                type="text"
-                placeholder="Work title"
-                value={studentProfile.workTitle}
-                onChange={(e) =>
-                  setStudentProfile({ ...studentProfile, workTitle: e.target.value })
-                }
-                className={inputClass}
-              />
-            </>
-          )}
-
-          <button
-            type="button"
-            onClick={handleSaveProfile}
-            disabled={savingProfile}
-            className={`mt-4 ${buttonClass} disabled:opacity-50`}
-          >
-            {savingProfile ? 'Saving...' : 'Save Changes'}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setScreen(editProfileReturnScreen)}
-            className={buttonClass}
-          >
-            Cancel
-          </button>
-
-          <div className={`mt-8 pt-6 ${selectedTheme === "notebook" ? "border-t-2 border-red-300" : "border-t border-white/10"}`}>
-            <button
-              type="button"
-              onClick={async () => {
-                const confirmed = window.confirm(
-                  'Are you sure you want to delete your account? This will permanently remove all your data and cannot be undone.'
-                );
-                if (!confirmed) return;
-
-                const doubleConfirm = window.confirm(
-                  'This is permanent. All your profile data, connections, and game history will be deleted. Continue?'
-                );
-                if (!doubleConfirm) return;
-
-                try {
-                  if (!sbUser?.id) return;
-
-                  // Delete profile from database
-                  const { error: deleteError } = await supabase
-                    .from('profiles')
-                    .delete()
-                    .eq('id', sbUser.id);
-
-                  if (deleteError) {
-                    alert('Failed to delete account. Please try again.');
-                    return;
-                  }
-
-                  // Sign out
-                  await supabase.auth.signOut();
-                  setSbUser(null);
-                  setStudentProfile({
-                    firstName: '', lastName: '', email: '', password: '',
-                    year: '', major: '', school: '', company: '', workTitle: '', linkedinUrl: '',
-                  });
-                  setSeatedRole(null);
-                  setScreen('role');
-                  alert('Your account has been deleted.');
-                } catch (e) {
-                  alert('Failed to delete account. Please try again.');
-                }
-              }}
-              className={`w-full ${
-                selectedTheme === "notebook"
-                  ? "rounded-2xl border-2 border-red-400 text-red-500 px-4 py-3 text-sm font-semibold transition-all hover:bg-red-500 hover:text-white"
-                  : "rounded-2xl border border-red-500/50 text-red-400 px-4 py-3 text-sm font-semibold transition-colors hover:bg-red-500 hover:text-white hover:border-red-500"
-              }`}
-            >
-              Delete Account
-            </button>
-          </div>
-        </div>
-      </div>
-    </main>
-  );
+  return <EditProfileScreen {...{auth, editProfileReturnScreen, game, savingProfile, sbUser, screen, seatedRole, selectedTheme, setSavingProfile, setSbUser, setScreen, setSeatedRole, setStudentProfile, studentProfile}} />;
 }
 
 /* ---------- about screen ---------- */
 
 if (screen === "about") {
-  return (
-    <main className={`relative flex min-h-screen items-center justify-center px-6 py-12 overflow-hidden ${
-      selectedTheme === "notebook"
-        ? "bg-[#f5f1e8]"
-        : "bg-gradient-to-br from-gray-900 via-black to-gray-900"
-    }`} style={selectedTheme === "notebook" ? {
-      backgroundImage: `
-        repeating-linear-gradient(0deg, transparent, transparent 31px, rgba(0,0,0,0.08) 31px, rgba(0,0,0,0.08) 33px),
-        linear-gradient(90deg, rgba(255,100,100,0.15) 0px, transparent 2px),
-        linear-gradient(90deg, rgba(100,100,255,0.15) 60px, transparent 2px)
-      `,
-      backgroundSize: '100% 33px, 100% 100%, 100% 100%'
-    } : {}}>
-
-      {selectedTheme === "default" && (
-        <>
-          <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 via-purple-500/5 to-pink-500/5 animate-gradient-shift"></div>
-          <div className="absolute inset-0 opacity-[0.02]" style={{
-            backgroundImage: 'radial-gradient(circle at 1px 1px, white 1px, transparent 0)',
-            backgroundSize: '40px 40px'
-          }}></div>
-        </>
-      )}
-
-      {selectedTheme === "notebook" && (
-        <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{
-          backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'200\' height=\'200\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noise\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'4\' /%3E%3C/filter%3E%3Crect width=\'200\' height=\'200\' filter=\'url(%23noise)\' /%3E%3C/svg%3E")',
-        }} />
-      )}
-
-      <div className={`w-full max-w-2xl relative z-10 ${selectedTheme === "default" ? "animate-slide-up" : ""}`}>
-        <div className="mb-8 flex items-center justify-between">
-          <h1 className={`font-bold ${
-            selectedTheme === "notebook"
-              ? "text-4xl font-permanent-marker text-[#1e40af] transform -rotate-1 relative"
-              : "text-3xl text-white tracking-tight"
-          }`}>
-            {selectedTheme === "notebook" && (
-              <span className="absolute -bottom-2 left-0 w-24 h-3 bg-yellow-200 opacity-40 -rotate-1 -z-10"></span>
-            )}
-            About
-          </h1>
-          <button
-            type="button"
-            onClick={() => setScreen("role")}
-            className={`px-4 py-2 text-sm font-semibold transition-all duration-300 ${
-              selectedTheme === "notebook"
-                ? "font-caveat text-lg text-gray-700 hover:text-[#dc2626]"
-                : "rounded-xl border border-white/20 text-white hover:bg-white hover:text-black hover:scale-[1.02]"
-            }`}
-            style={selectedTheme === "notebook" ? {
-              border: '2px solid #6b7280',
-              borderRadius: '8px 12px 10px 14px',
-              background: 'rgba(229, 229, 229, 0.3)'
-            } : {}}
-          >
-            Back
-          </button>
-        </div>
-
-        <div className={`space-y-6 leading-relaxed ${
-          selectedTheme === "notebook"
-            ? "text-gray-800 font-caveat text-lg"
-            : "text-white/90"
-        }`}>
-          <p>
-            Hi!
-            <br />
-            <br />
-            I'm a third year Economics student at UCLA interested in business, risk, and decision making.
-          </p>
-
-          <p>
-            I built HeadsUp as a different way to approach networking. When I reach out to someone, I offer to play a quick poker game (no stakes) while having a coffee chat. The game gives structure to the conversation and makes the interaction more memorable and engaging.
-          </p>
-
-          <p>
-            This project has been a way to learn product thinking. How do you design for behavior? What makes people actually use something? How do you go from idea to working product?
-          </p>
-
-          <p>
-            I'm using it for my own outreach now. The experience has been great! Some people love the format, others prefer a traditional call. Either way, I learn something from each conversation.
-          </p>
-
-          <p>
-            What started as a portfolio project has turned into something I genuinely want to grow. I'm exploring roles in product management, risk management, and FP&A, but I'm also open to seeing where HeadsUp can go. I'm proud of what I've built and always working to make it better.
-          </p>
-
-          <div className="mt-8 pt-6 border-t border-white/20">
-            <p className="font-semibold text-white mb-2">Joseph Kim-Lee</p>
-            <p className="text-sm text-white/70 mb-1">UCLA Economics '27</p>
-            <div className="flex flex-col gap-1 text-sm">
-              <a
-                href="mailto:josephklwork@gmail.com"
-                className="text-white/80 hover:text-white underline"
-              >
-                josephklwork@gmail.com
-              </a>
-              <a
-                href="https://linkedin.com/in/joseph-kim-lee"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-white/80 hover:text-white underline"
-              >
-                linkedin.com/in/joseph-kim-lee
-              </a>
-              <a
-                href="https://github.com/josephklwork-hash"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-white/80 hover:text-white underline"
-              >
-                github.com/josephklwork-hash
-              </a>
-            </div>
-          </div>
-        </div>
-      </div>
-    </main>
-  );
+  return <AboutScreen {...{game, screen, selectedTheme, setScreen}} />;
 }
 
   /* ---------- game view ---------- */
@@ -8103,14 +4129,8 @@ if (screen === "about") {
     )
   );
 
-  const defaultTo = facingBetBottom
-    ? bottomMinRaise
-    : roundToHundredth((displayGame.pot + displayGame.bets.top + displayGame.bets.bottom) * 0.5);
-
   // Opening action logic
   const isOpeningAction = displayGame.bets[myActualSeat] === 0 && displayGame.bets[oppActualSeat] === 0;
-  const effectiveBetSize = betSize === "" ? bottomMinRaise : betSize;
-  const safeBetSize = Math.max(effectiveBetSize, bottomMinRaise);
   
   // Display value: preflop opening defaults to 2BB, postflop opening defaults to 1BB
   const openingDefault = (displayStreet === 0 && isOpeningAction) ? 2 : (isOpeningAction && displayStreet > 0 ? 1 : bottomMinRaise);
@@ -8155,6 +4175,71 @@ const displayedActionLog = (riverAnimationComplete || displayStreet < 5)
 const displayedHistoryBoard = viewingSnapshot
   ? viewingSnapshot.endedBoard
   : [];
+
+const headerStatusText = opponentQuit
+  ? "Opponent Quit!"
+  : displayHandResult.status === "playing"
+  ? displayToAct === mySeat
+    ? "Your turn"
+    : "Opponent thinking…"
+  : ((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver))
+    ? (displayGame.stacks[myActualSeat] <= 0
+        ? "Game over — Opponent wins"
+        : "Game over — You win")
+    : "Hand ended (next hand in 8s)";
+
+const handleDashboardClick = () => {
+  if (opponentQuit) {
+    if (mpHost) { mpHost.destroy(); setMpHost(null); }
+    if (mpJoiner) { mpJoiner.destroy(); setMpJoiner(null); }
+    setMultiplayerActive(false);
+    setOpponentQuit(false);
+    setOpponentName(null);
+    sessionStorage.removeItem('headsup_gameId');
+    sessionStorage.removeItem('headsup_mySeat');
+    sessionStorage.removeItem('headsup_gamePin');
+    sessionStorage.removeItem('headsup_dealerOffset');
+    sessionStorage.removeItem('headsup_hostState');
+    sessionStorage.removeItem('headsup_handHistory');
+    clearTimers();
+    clearPin();
+    setGamePin(null);
+    setJoinMode(false);
+    setJoinPinInput("");
+    setAiEnabled(false);
+    setScreen(seatedRole === "professional" ? "professionalDashboard" : "dashboard");
+  } else {
+    setShowDashboardConfirm(true);
+  }
+};
+
+const handleTitleScreenClick = () => {
+  if (opponentQuit) {
+    if (mpHost) { mpHost.destroy(); setMpHost(null); }
+    if (mpJoiner) { mpJoiner.destroy(); setMpJoiner(null); }
+    setMultiplayerActive(false);
+    setOpponentQuit(false);
+    setOpponentName(null);
+    sessionStorage.removeItem('headsup_gameId');
+    sessionStorage.removeItem('headsup_mySeat');
+    sessionStorage.removeItem('headsup_gamePin');
+    sessionStorage.removeItem('headsup_dealerOffset');
+    sessionStorage.removeItem('headsup_hostState');
+    sessionStorage.removeItem('headsup_joinerState');
+    sessionStorage.removeItem('headsup_handHistory');
+    clearTimers();
+    clearPin();
+    setGamePin(null);
+    setJoinMode(false);
+    setJoinPinInput("");
+    setAiEnabled(false);
+    setOtherStudents([]);
+    setOtherProfessionals([]);
+    setScreen("role");
+  } else {
+    setShowTitleScreenConfirm(true);
+  }
+};
 
   return (
     <>
@@ -8326,12 +4411,11 @@ const displayedHistoryBoard = viewingSnapshot
 />
 
       <main
-        className={`relative flex items-center justify-center px-6 py-1 overflow-y-auto ${selectedTheme === "notebook" ? "bg-[#f5f1e8]" : "bg-gradient-to-br from-gray-900 via-black to-gray-900"}`}
+        className={`relative flex items-start md:items-center justify-center px-6 pt-3 pb-1 md:pt-1 h-[100dvh] overflow-hidden md:h-auto md:min-h-screen md:overflow-y-auto ${selectedTheme === "notebook" ? "bg-[#f5f1e8]" : "bg-gradient-to-br from-gray-900 via-black to-gray-900"}`}
         style={selectedTheme === "notebook" ? {
-          minHeight: '100vh',
           backgroundImage: `repeating-linear-gradient(0deg, transparent, transparent 31px, rgba(0,0,0,0.08) 31px, rgba(0,0,0,0.08) 33px), linear-gradient(90deg, rgba(255,100,100,0.15) 0px, transparent 2px), linear-gradient(90deg, rgba(100,100,255,0.15) 60px, transparent 2px)`,
           backgroundSize: '100% 33px, 100% 100%, 100% 100%'
-        } : { minHeight: '100vh' }}
+        } : undefined}
       >
 
       {selectedTheme === "default" && (
@@ -8374,7 +4458,7 @@ const displayedHistoryBoard = viewingSnapshot
                   });
                 }
               }}
-              className="rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border border-black bg-white px-6 py-2 min-[1536px]:max-[1650px]:px-4 min-[1536px]:max-[1650px]:py-1.5 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm hover:bg-gray-50"
+              className="rounded-2xl border border-black bg-white px-6 py-2 text-sm font-semibold text-black shadow-sm hover:bg-gray-50"
             >
               Play Again?
             </button>
@@ -8382,15 +4466,15 @@ const displayedHistoryBoard = viewingSnapshot
           
           {/* State 2: I requested, waiting for opponent */}
           {playAgainRequested && !opponentWantsPlayAgain && (
-            <div className="rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border border-black bg-white px-6 py-2 min-[1536px]:max-[1650px]:px-4 min-[1536px]:max-[1650px]:py-1.5 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm">
+            <div className="rounded-2xl border border-black bg-white px-6 py-2 text-sm font-semibold text-black shadow-sm">
               Sent request to {opponentName || "Opponent"}, waiting for response...
             </div>
           )}
           
           {/* State 3: Opponent requested, show Accept button */}
           {opponentWantsPlayAgain && !playAgainRequested && (
-            <div className="flex items-center gap-3 rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border border-black bg-white px-6 py-2 min-[1536px]:max-[1650px]:px-4 min-[1536px]:max-[1650px]:py-1.5 shadow-sm">
-              <span className="text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black">
+            <div className="flex items-center gap-3 rounded-2xl border border-black bg-white px-6 py-2 shadow-sm">
+              <span className="text-sm font-semibold text-black">
                 {opponentName || "Opponent"} wants to play again
               </span>
               <button
@@ -8428,7 +4512,7 @@ const displayedHistoryBoard = viewingSnapshot
                     setLogViewOffset(0);
                   }
                 }}
-                className="rounded-xl border border-green-600 bg-green-50 px-4 py-1 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-green-600 hover:bg-green-100"
+                className="rounded-xl border border-green-600 bg-green-50 px-4 py-1 text-sm font-semibold text-green-600 hover:bg-green-100"
               >
                 Accept
               </button>
@@ -8437,7 +4521,7 @@ const displayedHistoryBoard = viewingSnapshot
           
           {/* State 4: Both requested - starting new game */}
           {playAgainRequested && opponentWantsPlayAgain && (
-            <div className="rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border border-black bg-white px-6 py-2 min-[1536px]:max-[1650px]:px-4 min-[1536px]:max-[1650px]:py-1.5 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm">
+            <div className="rounded-2xl border border-black bg-white px-6 py-2 text-sm font-semibold text-black shadow-sm">
               Starting new game...
             </div>
           )}
@@ -8452,19 +4536,19 @@ const displayedHistoryBoard = viewingSnapshot
               setPlayAgainRequested(true);
               resetGame();
             }}
-            className="rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border border-black bg-white px-6 py-2 min-[1536px]:max-[1650px]:px-4 min-[1536px]:max-[1650px]:py-1.5 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm hover:bg-gray-50"
+            className="rounded-2xl border border-black bg-white px-6 py-2 text-sm font-semibold text-black shadow-sm hover:bg-gray-50"
           >
             Play Again?
           </button>
         </div>
       )}
 
-{/* Show Hand Button */}
-{displayHandResult.status === "ended" && 
+{/* Show Hand Button — positioned in same area as betting panel (bottom-right) */}
+{displayHandResult.status === "ended" &&
  canIShow &&
- !didIShow && 
+ !didIShow &&
  !((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver)) && (
-  <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50">
+  <div className="fixed bottom-4 md:bottom-6 right-4 md:right-6 z-50" style={{ transform: `scale(${tableScale})` }}>
     <button
       onClick={() => {
         if (multiplayerActive && isHost && mpHost) {
@@ -8487,13 +4571,13 @@ const displayedHistoryBoard = viewingSnapshot
           } else {
             setBottomShowed(true);
           }
-          
+
           if (youC && youD) {
             logAction(mySeat, `Shows ${cardStr(youC)} ${cardStr(youD)}`);
           }
         }
       }}
-      className="rounded-2xl min-[1536px]:max-[1650px]:rounded-xl border border-black bg-white px-6 py-2 min-[1536px]:max-[1650px]:px-4 min-[1536px]:max-[1650px]:py-1.5 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-black shadow-sm hover:bg-gray-50"
+      className="h-[64px] w-[100px] rounded-2xl border bg-white px-4 py-3 text-sm font-semibold text-black shadow-sm transition-all duration-300 hover:bg-gray-100 hover:scale-[1.02] hover:shadow-[0_10px_30px_rgba(0,0,0,0.1)] active:scale-[0.98]"
     >
       Show Hand
     </button>
@@ -8503,164 +4587,29 @@ const displayedHistoryBoard = viewingSnapshot
       {blindNotice && 
        displayHandResult.status === "playing" && 
        !((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver)) ? (
-  <div className="absolute top-6 left-1/2 -translate-x-1/2 text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-white">
+  <div className="absolute top-6 left-1/2 -translate-x-1/2 text-sm font-semibold text-white">
     {blindNotice}
   </div>
 ) : null}
         <div className="w-full max-w-6xl">
-          <div className="relative z-10 mb-3 md:mb-6 flex items-center justify-between">
-            <div>
-              <h1 className="text-2xl min-[1536px]:max-[1650px]:text-xl font-bold text-white">HeadsUp</h1>
-              <div className="text-sm min-[1536px]:max-[1650px]:text-xs text-white opacity-80 tabular-nums">
-                {streetLabel}{" "}
-                <span className="opacity-60">·</span>{" "}
-                <span className="opacity-90">
-  {opponentQuit
-    ? "Opponent Quit!"
-    : displayHandResult.status === "playing"
-    ? displayToAct === mySeat
-      ? "Your turn"
-      : "Opponent thinking…"
-    : ((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver))
-      ? (displayGame.stacks[myActualSeat] <= 0
-          ? "Game over — Opponent wins"
-          : "Game over — You win")
-      : "Hand ended (next hand in 8s)"}
-</span>
-              </div>
-              {handResult.message ? (
-                <div className="mt-1 text-sm min-[1536px]:max-[1650px]:text-xs text-white opacity-90">{handResult.message}</div>
-              ) : null}
-            </div>
-
-            <div className="flex items-center gap-4 min-[1536px]:max-[1650px]:gap-3">
-
-  {studentProfile.email && (
-  <button
-type="button"
-onClick={() => {
-  if (opponentQuit) {
-    // Opponent already quit, go directly to dashboard
-    if (mpHost) {
-      mpHost.destroy();
-      setMpHost(null);
-    }
-    if (mpJoiner) {
-      mpJoiner.destroy();
-      setMpJoiner(null);
-    }
-    setMultiplayerActive(false);
-    setOpponentQuit(false);
-    setOpponentName(null);
-
-    sessionStorage.removeItem('headsup_gameId');
-    sessionStorage.removeItem('headsup_mySeat');
-    sessionStorage.removeItem('headsup_gamePin');
-    sessionStorage.removeItem('headsup_dealerOffset');
-    sessionStorage.removeItem('headsup_hostState');
-    sessionStorage.removeItem('headsup_handHistory');
-
-    clearTimers();
-    clearPin();
-    setGamePin(null);
-    setJoinMode(false);
-    setJoinPinInput("");
-    setAiEnabled(false);
-    setScreen(seatedRole === "professional" ? "professionalDashboard" : "dashboard");
-  } else {
-    setShowDashboardConfirm(true);
-  }
-}}
-className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacity-80 hover:opacity-100"
->
-    Dashboard
-</button>
-)}
-
-  <button
-    type="button"
-    onClick={() => {
-      if (opponentQuit) {
-        // Opponent already quit, go directly to title screen
-        if (mpHost) {
-          mpHost.destroy();
-          setMpHost(null);
-        }
-        if (mpJoiner) {
-          mpJoiner.destroy();
-          setMpJoiner(null);
-        }
-        setMultiplayerActive(false);
-        setOpponentQuit(false);
-        setOpponentName(null);
-
-        // Clear saved session so we don't reconnect
-        sessionStorage.removeItem('headsup_gameId');
-        sessionStorage.removeItem('headsup_mySeat');
-        sessionStorage.removeItem('headsup_gamePin');
-        sessionStorage.removeItem('headsup_dealerOffset');
-        sessionStorage.removeItem('headsup_hostState');
-        sessionStorage.removeItem('headsup_joinerState');
-        sessionStorage.removeItem('headsup_handHistory');
-
-        clearTimers();
-        clearPin();
-        setGamePin(null);
-        setJoinMode(false);
-        setJoinPinInput("");
-        setAiEnabled(false);
-        setOtherStudents([]);
-        setOtherProfessionals([]);
-        setScreen("role");
-      } else {
-        // Show confirmation modal
-        setShowTitleScreenConfirm(true);
-      }
-    }}
-    className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacity-80 hover:opacity-100"
-  >
-    Title screen
-  </button>
-
-{/* Video Call Toggle - Only host can create, joiner auto-joins when room created */}
-{multiplayerActive && !dailyRoomUrl && !opponentQuit && mySeat === "bottom" && (
-  <button
-    type="button"
-    onClick={createDailyRoom}
-    disabled={isCreatingRoom}
-    className="text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-white underline opacity-80 hover:opacity-100 disabled:opacity-50"
-  >
-    {isCreatingRoom ? 'Starting video...' : 'Start Video Call'}
-  </button>
-)}
-
-{/* Show waiting message for joiner */}
-{multiplayerActive && !dailyRoomUrl && !opponentQuit && mySeat === "top" && (
-  <span className="text-sm min-[1536px]:max-[1650px]:text-xs text-white/60">
-    Waiting for host to start video...
-  </span>
-)}
-
-{multiplayerActive && videoCallActive && (
-  <span className="text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-white opacity-80">
-    Video active
-  </span>
-)}
-
-{roomCreationError && (
-  <span className="text-sm min-[1536px]:max-[1650px]:text-xs text-red-400 opacity-90">
-    {roomCreationError}
-  </span>
-)}
-
-{opponentQuit && (
-<div className="text-sm min-[1536px]:max-[1650px]:text-xs text-white opacity-90">
-      Opponent Quit, Go To Title Screen
-</div>
-  )}
-
-</div>
-          </div>
+          <GameHeader
+            streetLabel={streetLabel}
+            statusText={headerStatusText}
+            handResultMessage={handResult.message}
+            showDashboardLink={!!studentProfile.email}
+            opponentQuit={opponentQuit}
+            multiplayerActive={multiplayerActive}
+            dailyRoomUrl={dailyRoomUrl}
+            isCreatingRoom={isCreatingRoom}
+            videoCallActive={videoCallActive}
+            roomCreationError={roomCreationError}
+            mySeat={mySeat}
+            soundMuted={soundMuted}
+            onDashboardClick={handleDashboardClick}
+            onTitleScreenClick={handleTitleScreenClick}
+            onCreateDailyRoom={createDailyRoom}
+            onToggleSound={() => setSoundMutedState(prev => !prev)}
+          />
 
           {/* Video Call - Draggable window */}
           {multiplayerActive && dailyRoomUrl && (
@@ -8689,224 +4638,51 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
           )}
 
           {/* ACTION LOG pinned left + TABLE centered */}
-          <div className="relative mt-6 w-full">
-            {/* LEFT: ACTION LOG */}
-<div className="absolute -left-28 md:-left-36 min-[1536px]:max-[1650px]:!-left-[102px] top-0 w-[420px] md:w-[500px] min-[1536px]:max-[1650px]:w-[390px] rounded-3xl min-[1536px]:max-[1650px]:rounded-2xl border border-white/10 bg-black/20 p-3 md:p-4 min-[1536px]:max-[1650px]:p-2 text-white text-left">
- {/* Header row (matches your target screenshot) */}
-<div className="mb-6 min-[1536px]:max-[1650px]:mb-4 relative flex w-full items-center gap-4 min-[1536px]:max-[1650px]:gap-3">
-  {/* arrows */}
-  <div className="flex items-center gap-2 shrink-0">
-    <button
-      type="button"
-      className="rounded border border-white/20 bg-white/10 px-2 py-0.5 min-[1536px]:max-[1650px]:px-1.5 min-[1536px]:max-[1650px]:py-0 text-xs min-[1536px]:max-[1650px]:text-[10px] hover:bg-white/20"
-      onClick={() => setLogViewOffset((o) => Math.min(o + 1, handLogHistory.length))}
-    >
-      ◀
-    </button>
-
-    <button
-      type="button"
-      className="rounded border border-white/20 bg-white/10 px-2 py-0.5 min-[1536px]:max-[1650px]:px-1.5 min-[1536px]:max-[1650px]:py-0 text-xs min-[1536px]:max-[1650px]:text-[10px] hover:bg-white/20"
-      onClick={() => setLogViewOffset((o) => Math.max(o - 1, 0))}
-    >
-      ▶
-    </button>
-  </div>
-
-  {/* Action + stacks: glued right after arrows */}
-  <div className="flex items-baseline gap-3 min-[1536px]:max-[1650px]:gap-2 min-w-0">
-    <div className="text-sm min-[1536px]:max-[1650px]:text-xs font-semibold text-white whitespace-nowrap">Action</div>
-
-    <div className="text-xs min-[1536px]:max-[1650px]:text-[10px] font-normal text-white/70 tabular-nums whitespace-nowrap">
-      {viewingSnapshot
-        ? `You (${viewingSnapshot.heroPos}) ${formatBB(viewingSnapshot.heroStartStack)}bb · Opponent (${viewingSnapshot.oppPos}) ${formatBB(viewingSnapshot.oppStartStack)}bb`
-        : `You (${heroPosLabel}) ${formatBB(heroStartStack)}bb · Opponent (${oppPosLabel}) ${formatBB(oppStartStack)}bb`}
-    </div>
-  </div>
-
-  {/* Current hand pinned right */}
-  <div className="absolute right-4 min-[1536px]:max-[1650px]:right-2 top-1/2 -translate-y-1/2 text-xs min-[1536px]:max-[1650px]:text-[10px] text-white/70 tabular-nums whitespace-nowrap">
-  {logViewOffset === 0
-    ? `Hand #${(multiplayerActive && mpState ? mpState.handId : handId) + 1}`
-    : `Hand #${(handLogHistory[logViewOffset - 1]?.handNo ?? 0) + 1}`}
-</div>
-</div>
-
-  {/* Card summary - shown for both current hand (if ended) and history */}
-{(viewingSnapshot || displayHandResult.status === "ended") ? (
-  <div className="mb-3 min-[1536px]:max-[1650px]:mb-2 flex flex-col gap-2 min-[1536px]:max-[1650px]:gap-1">
-    <div className="flex items-start gap-4 min-[1536px]:max-[1650px]:gap-2">
-      <div className="flex flex-col gap-1 text-xs min-[1536px]:max-[1650px]:text-[10px] text-white/70 whitespace-nowrap">
-        <div>
-          You:{" "}
-          {viewingSnapshot ? (
-            renderActionText(`${cardStr(viewingSnapshot.heroCards[0])} ${cardStr(viewingSnapshot.heroCards[1])}`)
-          ) : (
-            // Current hand display - always show your cards
-            youC && youD
-              ? renderActionText(`${cardStr(youC)} ${cardStr(youD)}`)
-              : "No cards"
-          )}
-          {viewingSnapshot?.heroBest5 && viewingSnapshot.endedStreet === 5 ? (
-            <span className="ml-2 opacity-60">
-              → {renderActionText(viewingSnapshot.heroBest5.map(cardStr).join(" "))}
-            </span>
-          ) : (
-            heroBest5 && dealtCards.river && (
-              <span className="ml-2 opacity-60">
-                → {renderActionText(heroBest5.map(cardStr).join(" "))}
-              </span>
-            )
-          )}
-        </div>
-
-        <div>
-          Opponent:{" "}
-          {viewingSnapshot ? (
-            viewingSnapshot.oppShown
-              ? <>{renderActionText(`${cardStr(viewingSnapshot.oppCards[0])} ${cardStr(viewingSnapshot.oppCards[1])}`)}</>
-              : viewingSnapshot.log.some(
-                  (it) => it.seat === oppActualSeat && /fold/i.test(it.text)
-                )
-              ? "Folded"
-              : "Mucked"
-          ) : (
-            // Current hand display - wait for river animation before showing mucked/folded
-            displayHandResult.status === "ended" && (riverAnimationComplete || displayStreet < 5)
-              ? (
-                  // Show cards if conditions met
-                  (displayHandResult.reason === "showdown" && (
-                    mySeat === "bottom"
-                      ? displayOppRevealed
-                      : !displayYouMucked
-                  )) || didOppShow
-                ) && oppA && oppB
-                  ? renderActionText(`${cardStr(oppA)} ${cardStr(oppB)}`)
-                  : displayActionLog.some((it) => it.seat === oppActualSeat && /fold/i.test(it.text))
-                  ? "Folded"
-                  : "Mucked"
-              : "" // Wait for animation to complete before showing status
-          )}
-          {viewingSnapshot?.oppShown && viewingSnapshot.oppBest5 && viewingSnapshot.endedStreet === 5 ? (
-            <span className="ml-2 opacity-60">
-              → {renderActionText(viewingSnapshot.oppBest5.map(cardStr).join(" "))}
-            </span>
-          ) : (
-            oppBest5 && dealtCards.river && (riverAnimationComplete || displayStreet < 5) && (displayHandResult.status === "ended" && (
-              (displayHandResult.reason === "showdown" && (
-                myActualSeat === "bottom"
-                  ? displayOppRevealed
-                  : !displayYouMucked
-              ))
-              || didOppShow
-            )) && (
-              <span className="ml-2 opacity-60">
-                → {renderActionText(oppBest5.map(cardStr).join(" "))}
-              </span>
-            )
-          )}
-        </div>
-      </div>
-    
-    {/* Hand ranks display - updates dynamically as board runs out */}
-    {viewingSnapshot ? (
-      <>
-        {viewingSnapshot.heroHandRank && viewingSnapshot.endedStreet === 5 && (
-          <div className="text-xs text-white/60 pl-1">
-            You: {viewingSnapshot.heroHandRank}
-          </div>
-        )}
-        {viewingSnapshot.oppShown && viewingSnapshot.oppHandRank && viewingSnapshot.endedStreet === 5 && (
-          <div className="text-xs text-white/60 pl-1">
-            Opponent: {viewingSnapshot.oppHandRank}
-          </div>
-        )}
-      </>
-    ) : (
-      <>
-        {heroHandRank && (
-          <div className="text-xs text-white/60 pl-1">
-            You: {heroHandRank}
-          </div>
-        )}
-        {oppHandRank && (riverAnimationComplete || displayStreet < 5) && (displayHandResult.status === "ended" && (
-          (displayHandResult.reason === "showdown" && (
-            myActualSeat === "bottom"
-              ? displayOppRevealed
-              : !displayYouMucked
-          ))
-          || didOppShow
-        )) && (
-          <div className="text-xs text-white/60 pl-1">
-            Opponent: {oppHandRank}
-          </div>
-        )}
-      </>
-    )}
-  </div>
-
-    <div className="flex items-center gap-2 min-w-0 overflow-hidden">
-      {viewingSnapshot ? (
-        displayedHistoryBoard.map((c, i) => (
-          <div key={i} className="scale-[0.75] origin-left shrink-0">
-            <CardTile card={c} />
-          </div>
-        ))
-      ) : (
-        // Only show board cards after river animation completes (or if hand ended before river)
-        (riverAnimationComplete || displayStreet < 5) && board.slice(0, displayStreet).map((c, i) => (
-          <div key={i} className="scale-[0.75] origin-left shrink-0">
-            <CardTile card={c} />
-          </div>
-        ))
-      )}
-    </div>
-  </div>
-) : null}
-
-{/* Log list */}
-{displayedActionLog.length === 0 ? (
-  <div className="text-sm min-[1536px]:max-[1650px]:text-xs opacity-70">—</div>
-) : (
-  <div className="max-h-[calc(100vh-220px)] min-[1536px]:max-[1650px]:max-h-[calc(100vh-180px)] w-full overflow-auto pr-1">
-    <div className="w-full text-sm min-[1536px]:max-[1650px]:text-xs">
-      {displayedActionLog.slice(-30).map((a) => (
-        <div
-          key={a.id}
-          className="grid w-full grid-cols-[1fr_1fr_1fr] items-center py-2 leading-none"
-        >
-          <div
-            className="text-center text-xs min-[1536px]:max-[1650px]:text-[10px] uppercase tracking-wide text-white/60 -translate-x-4.5 leading-none"
-            style={{ paddingTop: "3px" }}
-          >
-            {a.street}
-          </div>
-
-          <div
-            className="text-center font-semibold text-white leading-none min-[1536px]:max-[1650px]:text-xs"
-            style={{ marginLeft: "-56px" }}
-          >
-            {a.seat === myActualSeat ? `You (${heroPosLabel})` : `Opponent (${oppPosLabel})`}
-          </div>
-
-          <div className="text-center text-white/90 tabular-nums break-words leading-none min-[1536px]:max-[1650px]:text-xs">
-            {renderActionText(a.text)}
-          </div>
-        </div>
-      ))}
-    </div>
-  </div>
-)}
-
-</div>
+          <div className="relative mt-[10px] md:mt-6 w-full">
+            <ActionLog
+              logViewOffset={logViewOffset}
+              setLogViewOffset={setLogViewOffset}
+              handLogHistory={handLogHistory}
+              viewingSnapshot={viewingSnapshot}
+              heroPosLabel={heroPosLabel}
+              heroStartStack={heroStartStack}
+              oppPosLabel={oppPosLabel}
+              oppStartStack={oppStartStack}
+              multiplayerActive={multiplayerActive}
+              mpHandId={multiplayerActive && mpState ? mpState.handId : null}
+              handId={handId}
+              displayHandResult={displayHandResult}
+              youC={youC}
+              youD={youD}
+              heroBest5={heroBest5}
+              dealtRiver={dealtCards.river}
+              oppA={oppA}
+              oppB={oppB}
+              oppBest5={oppBest5}
+              displayActionLog={displayActionLog}
+              didOppShow={didOppShow}
+              displayOppRevealed={displayOppRevealed}
+              displayYouMucked={displayYouMucked}
+              riverAnimationComplete={riverAnimationComplete}
+              displayStreet={displayStreet}
+              myActualSeat={myActualSeat}
+              oppActualSeat={oppActualSeat}
+              heroHandRank={heroHandRank}
+              oppHandRank={oppHandRank}
+              displayedHistoryBoard={displayedHistoryBoard}
+              board={board}
+              displayedActionLog={displayedActionLog}
+              mySeat={mySeat}
+              tableScale={tableScale}
+            />
 
             {/* CENTER: TABLE */}
-            <div className="mx-auto flex w-fit flex-col items-center gap-[60px] origin-center" style={{ transform: `scale(${tableScale})` }}>
+            <div className="mx-auto flex w-fit flex-col items-center gap-[90px] md:gap-[60px] pb-[110px] md:pb-0 origin-top md:origin-center" style={{ transform: `scale(${tableScale})` }}>
               {/* TOP SEAT (Opponent) */}
-              <div className={`animate-seat-appear relative h-[260px] w-[216px] -translate-y-6 rounded-3xl border border-white/20 bg-black/50 text-center ${showWinAnimation === 'opponent' && (riverAnimationComplete || displayStreet < 5) ? ((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver) ? 'permanent-win-glow' : 'animate-win-glow') : displayToAct === oppActualSeat && displayHandResult.status === 'playing' ? 'turn-active' : ''}`}>
+              <div className={`animate-seat-appear relative h-[290px] w-[240px] md:h-[260px] md:w-[216px] md:-translate-y-6 rounded-3xl border border-white/20 bg-black/50 text-center ${showWinAnimation === 'opponent' && (riverAnimationComplete || displayStreet < 5) ? ((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver) ? 'permanent-win-glow' : 'animate-win-glow') : displayToAct === oppActualSeat && displayHandResult.status === 'playing' ? 'turn-active' : ''}`}>
                 {!amIDealer && <div className={dealerChipTop}>D</div>}
 
-                <div className="absolute -bottom-14 left-1/2 -translate-x-1/2">
+                <div className="absolute -bottom-[70px] md:-bottom-14 left-1/2 -translate-x-1/2">
                   <BetChip amount={oppBet} label={oppLabel} />
                   {chipsToPot.filter(c => c.from === 'opponent').map(c => (
                     <div key={c.id} className="absolute inset-0 animate-chip-to-pot-opponent pointer-events-none">
@@ -8996,7 +4772,7 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
               {/* BOARD (always current hand) */}
 <div className="relative flex h-56 items-center justify-center">
   {/* Pot display — centered above board cards */}
-  <div className="absolute top-0 left-1/2 -translate-x-1/2 z-10">
+  <div className="absolute top-[17px] md:top-0 left-1/2 -translate-x-1/2 z-10">
     <div className="text-lg font-bold text-white tabular-nums tracking-wide whitespace-nowrap">
       Pot: {formatBB(roundToHundredth(
         isAnimatingAllIn ? winAmount : (displayGame.pot + displayGame.bets.top + displayGame.bets.bottom)
@@ -9018,7 +4794,7 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
       </div>
     </div>
   )}
-  <div className="absolute flex gap-3 top-[40px]">
+  <div className="absolute flex gap-3 top-[57px] md:top-[40px]">
     {board.slice(0, displayStreet).map((c, i) => {
       // Determine which animation to apply based on card index
       const cardKey = i === 0 ? 'flop1' : i === 1 ? 'flop2' : i === 2 ? 'flop3' : i === 3 ? 'turn' : 'river';
@@ -9033,10 +4809,10 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
 </div>
 
               {/* BOTTOM SEAT (You) */}
-              <div className={`animate-seat-appear relative h-[260px] w-[216px] -translate-y-6 rounded-3xl border border-white/20 bg-black/50 text-center ${showWinAnimation === 'hero' && (riverAnimationComplete || displayStreet < 5) ? ((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver) ? 'permanent-win-glow' : 'animate-win-glow') : displayToAct === mySeat && displayHandResult.status === 'playing' ? 'turn-active' : ''}`}>
+              <div className={`animate-seat-appear relative h-[290px] w-[240px] md:h-[260px] md:w-[216px] -translate-y-6 rounded-3xl border border-white/20 bg-black/50 text-center ${showWinAnimation === 'hero' && (riverAnimationComplete || displayStreet < 5) ? ((multiplayerActive && mpState?.gameOver) || (!multiplayerActive && gameOver) ? 'permanent-win-glow' : 'animate-win-glow') : displayToAct === mySeat && displayHandResult.status === 'playing' ? 'turn-active' : ''}`}>
                 {amIDealer && <div className={dealerChipBottom}>D</div>}
 
-                <div className="absolute -top-14 left-1/2 -translate-x-1/2">
+                <div className="absolute -top-[70px] md:-top-14 left-1/2 -translate-x-1/2">
                   <BetChip amount={myBet} label={myLabel} />
                   {chipsToPot.filter(c => c.from === 'hero').map(c => (
                     <div key={c.id} className="absolute inset-0 animate-chip-to-pot-hero pointer-events-none">
@@ -9113,148 +4889,29 @@ className="text-sm min-[1536px]:max-[1650px]:text-xs text-white underline opacit
           </div>
 
           {/* ACTION PANEL (bottom-right) */}
-          {displayToAct === mySeat && displayHandResult.status === "playing" && (
-            <div className="fixed bottom-4 md:bottom-6 right-4 md:right-6 z-50 flex w-[280px] md:w-[320px] flex-col gap-2 md:gap-3 origin-bottom-right" style={{ transform: `scale(${tableScale})` }}>
-              {displayGame.stacks[myActualSeat] > bottomCallAmt && displayGame.stacks[oppActualSeat] > 0 && bottomMaxTo > bottomMinRaise && (
-                <div className="rounded-2xl border bg-white p-3 text-black shadow-sm">
-                  <div className="mb-2 flex items-center justify-between">
-                    <div className="text-sm font-semibold">{facingBetBottom ? "Raise to" : "Bet to"}</div>
-                    <div className="text-sm font-bold tabular-nums">{formatBB(displayBetSize)} BB</div>
-                  </div>
-
-                  <div className="mb-2 flex gap-1.5">
-                    {[33, 50, 75].map(pct => {
-                      const currentPot = displayGame.pot + displayGame.bets.top + displayGame.bets.bottom;
-                      const target = facingBetBottom
-                        ? roundToHundredth(displayGame.bets[oppActualSeat] + (pct / 100) * (currentPot + bottomCallAmt))
-                        : roundToHundredth((pct / 100) * currentPot);
-                      const clamped = Math.min(Math.max(target, bottomMinRaise), bottomMaxTo);
-                      return (
-                        <button
-                          key={pct}
-                          type="button"
-                          onClick={() => setBetSizeRounded(clamped)}
-                          className="flex-1 rounded-lg border border-gray-200 py-1 text-xs font-semibold text-black transition-colors hover:bg-gray-100 active:bg-gray-200"
-                        >
-                          {pct}%
-                        </button>
-                      );
-                    })}
-                    <button
-                      type="button"
-                      onClick={() => setBetSizeRounded(bottomMaxTo)}
-                      className="flex-1 rounded-lg border border-gray-200 py-1 text-xs font-bold text-black transition-colors hover:bg-gray-100 active:bg-gray-200"
-                    >
-                      All In
-                    </button>
-                  </div>
-
-                  <div className="flex items-center gap-3 min-w-0">
-                    <input
-                      type="range"
-                      min={bottomMinRaise}
-                      max={bottomMaxTo}
-                      step={0.01}
-                      value={betSize === "" ? bottomMinRaise : Math.max(betSize, bottomMinRaise)}
-                      onChange={(e) => setBetSizeRounded(Number(e.target.value))}
-                      className="w-full"
-                    />
-
-                    <input
-                      type="number"
-                      step="0.01"
-                      inputMode="decimal"
-                      min={0.01}
-                      max={bottomMaxTo}
-                      value={betSize === "" ? "" : betSize}
-                      placeholder=""
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        if (val === "") {
-                          setBetSize("");
-                        } else {
-                          const num = Number(val);
-                          // Allow any number up to max, don't enforce minimum during typing
-                          if (num > 0) {
-                            setBetSize(Math.min(num, bottomMaxTo));
-                          }
-                        }
-                      }}
-                      onBlur={() => {
-                        // On blur, enforce minimum
-                        if (betSize === "" || betSize < bottomMinRaise) {
-                          setBetSizeRounded((displayStreet === 0 && isOpeningAction) ? 2 : bottomMinRaise);
-                        } else {
-                          setBetSizeRounded(Math.min(betSize, bottomMaxTo));
-                        }
-                      }}
-                      className="w-24 rounded-xl border px-2 py-1 text-sm tabular-nums"
-                    />
-                  </div>
-                </div>
-              )}
-
-              <div className="flex justify-end gap-3 w-full">
-                <button
-  type="button"
-  onClick={() => {
-    // Determine if fold warning should show
-    const facingBet = displayGame.bets[oppActualSeat] > displayGame.bets[myActualSeat];
-    
-    // Show warning when not facing a bet (can check for free)
-    const shouldWarn = !facingBet;
-    
-    if (shouldWarn) {
-      setShowFoldConfirm(true);
-    } else {
-      dispatchAction({ type: "FOLD" });
-    }
-  }}
-  disabled={!(displayToAct === mySeat && displayHandResult.status === "playing") || actionInProgress}
-  className="h-[64px] w-[100px] rounded-2xl border bg-white px-4 py-3 text-sm font-semibold text-black shadow-sm transition-all duration-300 hover:bg-gray-100 hover:scale-[1.02] hover:shadow-[0_10px_30px_rgba(0,0,0,0.1)] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
->
-  Fold
-</button>
-
-               <button
-  type="button"
-  onClick={() => {
-    dispatchAction(facingBetBottom ? { type: "CALL" } : { type: "CHECK" });
-  }}
-  disabled={!(displayToAct === mySeat && displayHandResult.status === "playing") || actionInProgress}
-  className="flex h-[64px] w-[100px] flex-col items-center justify-center rounded-2xl border bg-white px-4 py-3 text-sm font-semibold text-black shadow-sm transition-all duration-300 hover:bg-gray-100 hover:scale-[1.02] hover:shadow-[0_10px_30px_rgba(0,0,0,0.1)] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
->
-  <div>{facingBetBottom ? "Call" : "Check"}</div>
-
-  {facingBetBottom && (
-    <div className="mt-0.5 text-xs font-bold tabular-nums">
-      {formatBB(bottomCallAmt)} BB
-    </div>
-  )}
-</button>
-
-                {displayGame.stacks[myActualSeat] > bottomCallAmt && displayGame.stacks[oppActualSeat] > 0 && (
-                  <button
-  type="button"
-  onClick={() => {
-    const finalSize = betSize === "" || betSize < bottomMinRaise ? openingDefault : Math.max(betSize, bottomMinRaise);
-    dispatchAction({ type: "BET_RAISE_TO", to: finalSize });
-  }}
-  disabled={!(displayToAct === mySeat && displayHandResult.status === "playing") || actionInProgress}
-  className="flex h-[64px] w-[100px] flex-col items-center justify-center rounded-2xl border bg-white px-4 py-3 text-sm font-semibold text-black shadow-sm transition-all duration-300 hover:bg-gray-100 hover:scale-[1.02] hover:shadow-[0_10px_30px_rgba(0,0,0,0.1)] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
->
-  <div className="text-sm leading-tight">
-    {facingBetBottom ? "Raise" : "Bet"}
-  </div>
-
-  <div className="mt-0.5 w-full text-center text-xs font-bold tabular-nums">
-    {formatBB(displayBetSize)} BB
-  </div>
-</button>
-                )}
-              </div>
-            </div>
-          )}
+          <ActionPanel
+            tableScale={tableScale}
+            displayGame={displayGame}
+            myActualSeat={myActualSeat}
+            oppActualSeat={oppActualSeat}
+            mySeat={mySeat}
+            displayToAct={displayToAct}
+            displayHandResult={displayHandResult}
+            bottomCallAmt={bottomCallAmt}
+            bottomMaxTo={bottomMaxTo}
+            bottomMinRaise={bottomMinRaise}
+            displayBetSize={displayBetSize}
+            facingBetBottom={facingBetBottom}
+            betSize={betSize}
+            actionInProgress={actionInProgress}
+            displayStreet={displayStreet}
+            isOpeningAction={isOpeningAction}
+            openingDefault={openingDefault}
+            setBetSizeRounded={setBetSizeRounded}
+            setBetSize={setBetSize}
+            setShowFoldConfirm={setShowFoldConfirm}
+            dispatchAction={dispatchAction}
+          />
         </div>
       </main>
     </>

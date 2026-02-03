@@ -13,29 +13,9 @@
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { GAME_CONFIG } from "./gameConfig";
 
-// Types
-export type Seat = "top" | "bottom";
-export type Street = 0 | 3 | 4 | 5;
-export type StreetName = "Preflop" | "Flop" | "Turn" | "River";
-
-export type Card = {
-  rank: string;
-  suit: string;
-};
-
-export type GameState = {
-  stacks: { top: number; bottom: number };
-  bets: { top: number; bottom: number };
-  pot: number;
-};
-
-export type ActionLogItem = {
-  id: string;
-  sequence: number;
-  street: StreetName;
-  seat: Seat;
-  text: string;
-};
+// Re-export shared types so existing imports from "./multiplayerHost" still work
+export type { Seat, Street, StreetName, Card, GameState, ActionLogItem } from './types';
+import type { Seat, Street, StreetName, Card, GameState, ActionLogItem } from './types';
 
 export type GameAction =
   | { type: "FOLD" }

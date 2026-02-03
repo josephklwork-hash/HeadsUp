@@ -325,6 +325,33 @@ body {
   animation: pot-to-opponent 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
 }
 
+/* Action log overlay slide animations */
+@keyframes overlay-slide-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes overlay-slide-down {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(100%);
+  }
+}
+
+.animate-overlay-slide-up {
+  animation: overlay-slide-up 0.35s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+}
+
+.animate-overlay-slide-down {
+  animation: overlay-slide-down 0.3s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+}
+
 /* Active turn indicator */
 .turn-active.turn-active {
   border-color: rgba(59, 130, 246, 0.8) !important;
