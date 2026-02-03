@@ -3533,7 +3533,7 @@ const youRaw2 = mySeat === "bottom" ? bottomRaw2 : topRaw2;
   // Preflop: show hand strength with just 2 cards
   if (visibleBoardCount === 0) {
     if (youC.rank === youD.rank) {
-      return `Pair of ${VALUE_TO_NAME[RANK_TO_VALUE[youC.rank]]}s`;
+      return `Pair of ${pluralRank(RANK_TO_VALUE[youC.rank])}`;
     } else {
       const higherCard = RANK_TO_VALUE[youC.rank] > RANK_TO_VALUE[youD.rank] ? youC : youD;
       return `High Card, ${VALUE_TO_NAME[RANK_TO_VALUE[higherCard.rank]]}`;
@@ -3557,7 +3557,7 @@ const youRaw2 = mySeat === "bottom" ? bottomRaw2 : topRaw2;
   // Preflop: show hand strength with just 2 cards
   if (visibleBoardCount === 0) {
     if (oppA.rank === oppB.rank) {
-      return `Pair of ${VALUE_TO_NAME[RANK_TO_VALUE[oppA.rank]]}s`;
+      return `Pair of ${pluralRank(RANK_TO_VALUE[oppA.rank])}`;
     } else {
       const higherCard = RANK_TO_VALUE[oppA.rank] > RANK_TO_VALUE[oppB.rank] ? oppA : oppB;
       return `High Card, ${VALUE_TO_NAME[RANK_TO_VALUE[higherCard.rank]]}`;
@@ -8507,7 +8507,7 @@ const displayedHistoryBoard = viewingSnapshot
   </div>
 ) : null}
         <div className="w-full max-w-6xl">
-          <div className="mb-3 md:mb-6 min-[1536px]:max-[1650px]:mb-2 flex items-center justify-between">
+          <div className="relative z-10 mb-3 md:mb-6 flex items-center justify-between">
             <div>
               <h1 className="text-2xl min-[1536px]:max-[1650px]:text-xl font-bold text-white">HeadsUp</h1>
               <div className="text-sm min-[1536px]:max-[1650px]:text-xs text-white opacity-80 tabular-nums">
