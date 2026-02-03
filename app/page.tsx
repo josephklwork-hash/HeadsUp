@@ -23,11 +23,12 @@ import {
   checkRateLimit, recordRateLimitAttempt,
   validateMessage,
 } from './utils/validation';
-import {
-  initAudio, setMuted as setSoundMuted,
-  playDealCard, playCheck, playCall, playBetRaise,
-  playFold, playAllIn, playWin, playLose,
-} from './utils/soundManager';
+// Sound disabled for now — uncomment when new sounds are ready
+// import {
+//   initAudio, setMuted as setSoundMuted,
+//   playDealCard, playCheck, playCall, playBetRaise,
+//   playFold, playAllIn, playWin, playLose,
+// } from './utils/soundManager';
 
 export const dynamic = 'force-dynamic';  // ← THIS LINE
 
@@ -460,22 +461,22 @@ const [actionFlashes, setActionFlashes] = useState<{ id: string; seat: 'hero' | 
 const [potToWinner, setPotToWinner] = useState<{ id: string; target: 'hero' | 'opponent'; amount: number } | null>(null);
 const prevActionLogLenRef = useRef(0);
 
-// Sound state
+// Sound state — disabled for now, uncomment when new sounds are ready
 const [soundMuted, setSoundMutedState] = useState(false);
 const winSoundPlayedRef = useRef<string | null>(null);
 
-useEffect(() => {
-  const saved = sessionStorage.getItem('headsup_soundMuted');
-  if (saved === 'true') {
-    setSoundMutedState(true);
-    setSoundMuted(true);
-  }
-}, []);
+// useEffect(() => {
+//   const saved = sessionStorage.getItem('headsup_soundMuted');
+//   if (saved === 'true') {
+//     setSoundMutedState(true);
+//     setSoundMuted(true);
+//   }
+// }, []);
 
-useEffect(() => {
-  sessionStorage.setItem('headsup_soundMuted', String(soundMuted));
-  setSoundMuted(soundMuted);
-}, [soundMuted]);
+// useEffect(() => {
+//   sessionStorage.setItem('headsup_soundMuted', String(soundMuted));
+//   setSoundMuted(soundMuted);
+// }, [soundMuted]);
 
 // Dynamic table zoom — fits game to any screen size
 const [tableScale, setTableScale] = useState(1);
@@ -555,22 +556,22 @@ useEffect(() => {
     // Start immediately
     setDealtCards(prev => ({ ...prev, sbCard1: true }));
     setCardsVisible(prev => ({ ...prev, sbCard1: true }));
-    playDealCard();
+    // playDealCard();
 
     await new Promise(r => setTimeout(r, 100));
     setDealtCards(prev => ({ ...prev, bbCard1: true }));
     setCardsVisible(prev => ({ ...prev, bbCard1: true }));
-    playDealCard();
+    // playDealCard();
 
     await new Promise(r => setTimeout(r, 100));
     setDealtCards(prev => ({ ...prev, sbCard2: true }));
     setCardsVisible(prev => ({ ...prev, sbCard2: true }));
-    playDealCard();
+    // playDealCard();
 
     await new Promise(r => setTimeout(r, 100));
     setDealtCards(prev => ({ ...prev, bbCard2: true }));
     setCardsVisible(prev => ({ ...prev, bbCard2: true }));
-    playDealCard();
+    // playDealCard();
 
     // After all dealing animations complete (400ms animation + slight buffer), remove animation classes
     await new Promise(r => setTimeout(r, 500));
@@ -955,7 +956,6 @@ useEffect(() => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   signalCh.on("broadcast", { event: "mp" }, ({ payload }: any) => {
     if (payload?.event === "JOINER_READY") {
-      console.log("[host] Received JOINER_READY via signal channel");
       onJoinerReady();
     }
   });
@@ -971,7 +971,6 @@ useEffect(() => {
       .single();
 
     if (data?.status === "active") {
-      console.log("[host] Detected game active via polling");
       clearInterval(interval);
       onJoinerReady();
     }
@@ -1834,15 +1833,15 @@ const displayBottomShowed = multiplayerActive && mpState ? mpState.bottomShowed 
         // All-in: 1500ms delay, Normal: 200ms delay
         await new Promise(r => setTimeout(r, isAllIn ? 1500 : 200));
         setDealtCards(prev => ({ ...prev, flop1: true }));
-        playDealCard();
+        // playDealCard();
 
         await new Promise(r => setTimeout(r, 100));
         setDealtCards(prev => ({ ...prev, flop2: true }));
-        playDealCard();
+        // playDealCard();
 
         await new Promise(r => setTimeout(r, 100));
         setDealtCards(prev => ({ ...prev, flop3: true }));
-        playDealCard();
+        // playDealCard();
       }
 
       if (displayStreet >= 4 && !dealtCards.turn) {
@@ -1850,7 +1849,7 @@ const displayBottomShowed = multiplayerActive && mpState ? mpState.bottomShowed 
         // All-in: 2000ms delay, Normal: 300ms delay
         await new Promise(r => setTimeout(r, isAllIn ? 2000 : 300));
         setDealtCards(prev => ({ ...prev, turn: true }));
-        playDealCard();
+        // playDealCard();
       }
 
       if (displayStreet >= 5 && !dealtCards.river) {
@@ -1858,7 +1857,7 @@ const displayBottomShowed = multiplayerActive && mpState ? mpState.bottomShowed 
         // All-in: 3000ms delay, Normal: 300ms delay
         await new Promise(r => setTimeout(r, isAllIn ? 3000 : 300));
         setDealtCards(prev => ({ ...prev, river: true }));
-        playDealCard();
+        // playDealCard();
       }
     };
 
@@ -1937,11 +1936,11 @@ const displayBottomShowed = multiplayerActive && mpState ? mpState.bottomShowed 
         setActionFlashes(prev => prev.filter(f => f.id !== entry.id));
       }, 2300);
 
-      // Sound effects for actions
-      if (/^folds/.test(text)) playFold();
-      else if (/^checks/.test(text)) playCheck();
-      else if (/^calls/.test(text)) playCall();
-      else if (/^(bets|raises)/.test(text)) playBetRaise();
+      // Sound effects for actions — disabled for now
+      // if (/^folds/.test(text)) playFold();
+      // else if (/^checks/.test(text)) playCheck();
+      // else if (/^calls/.test(text)) playCall();
+      // else if (/^(bets|raises)/.test(text)) playBetRaise();
 
       // Chip-to-pot only for bet/call/raise actions
       if (/^(calls|bets|raises)/.test(text)) {
@@ -1968,7 +1967,7 @@ const displayBottomShowed = multiplayerActive && mpState ? mpState.bottomShowed 
       const soundKey = `${handId}-${showWinAnimation}`;
       if (winSoundPlayedRef.current !== soundKey) {
         winSoundPlayedRef.current = soundKey;
-        if (showWinAnimation === 'hero') playWin(); else playLose();
+        // if (showWinAnimation === 'hero') playWin(); else playLose();
       }
 
       setTimeout(() => setPotToWinner(null), 700);
@@ -2168,30 +2167,22 @@ async function joinPinGame() {
     let user: User;
     if (sbUser) {
       user = sbUser;
-      console.log("[joinPinGame] Using existing sbUser:", user.id);
     } else {
       try {
         const authTimeout = <T,>(p: Promise<T>) =>
           Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), 30000))]);
 
-        console.log("[joinPinGame] No sbUser, getting session...");
         const { data: sessionData } = await authTimeout(supabase.auth.getSession());
-        console.log("[joinPinGame] getSession result:", { hasSession: !!sessionData?.session, hasUser: !!sessionData?.session?.user });
 
         if (sessionData?.session?.user) {
           user = sessionData.session.user;
-          console.log("[joinPinGame] Using session user:", user.id);
         } else {
-          console.log("[joinPinGame] No session, attempting anonymous sign-in...");
           await supabase.auth.signOut().catch(() => {});
           const { data: anonData, error: anonErr } = await authTimeout(supabase.auth.signInAnonymously());
-          console.log("[joinPinGame] signInAnonymously result:", { hasUser: !!anonData?.user, anonErr });
           if (anonErr || !anonData.user) throw anonErr ?? new Error("No user returned from anonymous sign-in");
           user = anonData.user;
-          console.log("[joinPinGame] Created anonymous user:", user.id);
         }
-      } catch (err) {
-        console.error("[joinPinGame] Auth failed:", err);
+      } catch {
         alert("Could not start session. Check your internet and try again.");
         return;
       }
@@ -2204,7 +2195,6 @@ async function joinPinGame() {
       .single();
 
     if (gameErr || !gameRow) {
-      console.error("[joinPinGame] Game lookup failed:", gameErr);
       alert('Invalid PIN.');
       return;
     }
@@ -2216,7 +2206,6 @@ async function joinPinGame() {
     });
 
     if (playerErr) {
-      console.error("[joinPinGame] Player insert failed:", playerErr);
       alert("Could not join. Seat may be taken.");
       return;
     }
@@ -2224,11 +2213,7 @@ async function joinPinGame() {
     // Update game status to active — retry on failure so host's polling detects joiner
     for (let attempt = 0; attempt < 3; attempt++) {
       const { error: statusErr } = await supabase.from("games").update({ status: "active" }).eq("id", gameRow.id);
-      if (!statusErr) {
-        console.log("[joinPinGame] Game status set to active");
-        break;
-      }
-      console.warn("[joinPinGame] Status update attempt", attempt + 1, "failed:", statusErr);
+      if (!statusErr) break;
       if (attempt < 2) await new Promise(r => setTimeout(r, 500));
     }
 
@@ -3212,7 +3197,7 @@ if (
   (callerWillBeAllIn || game.stacks[bettorSeat] <= 0)
 ) {
   allInCallThisHandRef.current = true;
-  playAllIn();
+  // playAllIn();
 }
 
 if (street !== 0 && callerWillBeAllIn && bettor) {
@@ -3359,7 +3344,7 @@ if (street === 5 && currentFacingBet(seat)) {
 
   function dispatchAction(action: GameAction) {
   // Initialize audio on first user gesture
-  initAudio();
+  // initAudio();
 
   // Prevent rapid successive clicks (fixes auto-check bug from double-clicking)
   if (actionInProgress) {
