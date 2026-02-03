@@ -943,21 +943,26 @@ useEffect(() => {
   if (!gamePin) return; // Not in a PIN game
   if (mySeat !== "bottom") return; // Only host needs this
 
-  // Listen for joiner's broadcast message (primary method)
-  const ch = supabase.channel(`game:${gameId}`);
-  
+  // Listen for joiner's broadcast message on the dedicated join-signal channel
+  const signalCh = supabase.channel(`game:${gameId}:join-signal`);
+
+  const onJoinerReady = () => {
+    setMultiplayerActive(true);
+    setSeatedRole((prev) => prev ?? "student");
+    setScreen("game");
+  };
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ch.on("broadcast", { event: "mp" }, ({ payload }: any) => {
+  signalCh.on("broadcast", { event: "mp" }, ({ payload }: any) => {
     if (payload?.event === "JOINER_READY") {
-      setMultiplayerActive(true);
-      setSeatedRole((prev) => prev ?? "student");
-      setScreen("game");
+      console.log("[host] Received JOINER_READY via signal channel");
+      onJoinerReady();
     }
   });
-  
-  ch.subscribe();
 
-  // Also poll for game becoming active (backup)
+  signalCh.subscribe();
+
+  // Also poll for game becoming active (backup — catches status update even if broadcast missed)
   const interval = setInterval(async () => {
     const { data } = await supabase
       .from("games")
@@ -966,28 +971,21 @@ useEffect(() => {
       .single();
 
     if (data?.status === "active") {
+      console.log("[host] Detected game active via polling");
       clearInterval(interval);
-      setMultiplayerActive(true);
-      setSeatedRole((prev) => prev ?? "student");
-      setScreen("game");
+      onJoinerReady();
     }
   }, 1000);
 
   return () => {
     clearInterval(interval);
-    supabase.removeChannel(ch);
+    supabase.removeChannel(signalCh);
   };
 }, [gameId, multiplayerActive, gamePin, mySeat]);
 
 useEffect(() => {
   if (!gameId) return;
   if (!multiplayerActive) return;
-
-  // Clean up temp channel from joinPinGame to avoid duplicate channel collision
-  if (tempChannelRef.current) {
-    supabase.removeChannel(tempChannelRef.current);
-    tempChannelRef.current = null;
-  }
 
   const ch = supabase.channel(`game:${gameId}`);
   mpChannelRef.current = ch;
@@ -2166,34 +2164,37 @@ async function joinPinGame() {
   setCreatingGame(true);
 
   try {
+    // Use already-authenticated user if available, skip the auth dance entirely
     let user: User;
-    try {
-      const authTimeout = <T,>(p: Promise<T>) =>
-        Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), 30000))]);
+    if (sbUser) {
+      user = sbUser;
+      console.log("[joinPinGame] Using existing sbUser:", user.id);
+    } else {
+      try {
+        const authTimeout = <T,>(p: Promise<T>) =>
+          Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), 30000))]);
 
-      // Try local session first (instant)
-      console.log("[joinPinGame] Getting session...");
-      const { data: sessionData, error: sessionErr } = await authTimeout(supabase.auth.getSession());
-      console.log("[joinPinGame] getSession result:", { hasSession: !!sessionData?.session, hasUser: !!sessionData?.session?.user, sessionErr });
+        console.log("[joinPinGame] No sbUser, getting session...");
+        const { data: sessionData } = await authTimeout(supabase.auth.getSession());
+        console.log("[joinPinGame] getSession result:", { hasSession: !!sessionData?.session, hasUser: !!sessionData?.session?.user });
 
-      if (sessionData?.session?.user) {
-        user = sessionData.session.user;
-        console.log("[joinPinGame] Using existing session user:", user.id, "isAnon:", user.is_anonymous);
-      } else {
-        // No valid session — sign out to clear stale tokens, then create fresh anonymous user
-        console.log("[joinPinGame] No session, signing out stale tokens...");
-        await supabase.auth.signOut().catch((e) => console.log("[joinPinGame] signOut error (ignored):", e));
-        console.log("[joinPinGame] Attempting anonymous sign-in...");
-        const { data: anonData, error: anonErr } = await authTimeout(supabase.auth.signInAnonymously());
-        console.log("[joinPinGame] signInAnonymously result:", { hasUser: !!anonData?.user, anonErr });
-        if (anonErr || !anonData.user) throw anonErr ?? new Error("No user returned from anonymous sign-in");
-        user = anonData.user;
-        console.log("[joinPinGame] Created anonymous user:", user.id);
+        if (sessionData?.session?.user) {
+          user = sessionData.session.user;
+          console.log("[joinPinGame] Using session user:", user.id);
+        } else {
+          console.log("[joinPinGame] No session, attempting anonymous sign-in...");
+          await supabase.auth.signOut().catch(() => {});
+          const { data: anonData, error: anonErr } = await authTimeout(supabase.auth.signInAnonymously());
+          console.log("[joinPinGame] signInAnonymously result:", { hasUser: !!anonData?.user, anonErr });
+          if (anonErr || !anonData.user) throw anonErr ?? new Error("No user returned from anonymous sign-in");
+          user = anonData.user;
+          console.log("[joinPinGame] Created anonymous user:", user.id);
+        }
+      } catch (err) {
+        console.error("[joinPinGame] Auth failed:", err);
+        alert("Could not start session. Check your internet and try again.");
+        return;
       }
-    } catch (err) {
-      console.error("[joinPinGame] Auth failed:", err);
-      alert("Could not start session. Check your internet and try again.");
-      return;
     }
 
     const { data: gameRow, error: gameErr } = await supabase
@@ -2203,6 +2204,7 @@ async function joinPinGame() {
       .single();
 
     if (gameErr || !gameRow) {
+      console.error("[joinPinGame] Game lookup failed:", gameErr);
       alert('Invalid PIN.');
       return;
     }
@@ -2214,11 +2216,21 @@ async function joinPinGame() {
     });
 
     if (playerErr) {
+      console.error("[joinPinGame] Player insert failed:", playerErr);
       alert("Could not join. Seat may be taken.");
       return;
     }
 
-    await supabase.from("games").update({ status: "active" }).eq("id", gameRow.id);
+    // Update game status to active — retry on failure so host's polling detects joiner
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { error: statusErr } = await supabase.from("games").update({ status: "active" }).eq("id", gameRow.id);
+      if (!statusErr) {
+        console.log("[joinPinGame] Game status set to active");
+        break;
+      }
+      console.warn("[joinPinGame] Status update attempt", attempt + 1, "failed:", statusErr);
+      if (attempt < 2) await new Promise(r => setTimeout(r, 500));
+    }
 
     // Broadcast to host that joiner has joined
     // Clean up any previous temp channel
@@ -2226,7 +2238,7 @@ async function joinPinGame() {
       supabase.removeChannel(tempChannelRef.current);
       tempChannelRef.current = null;
     }
-    const tempChannel = supabase.channel(`game:${gameRow.id}`);
+    const tempChannel = supabase.channel(`game:${gameRow.id}:join-signal`);
     tempChannelRef.current = tempChannel;
     tempChannel.subscribe((status) => {
       if (status === 'SUBSCRIBED') {
@@ -2244,6 +2256,13 @@ async function joinPinGame() {
         setTimeout(notifyHost, 300);
         setTimeout(notifyHost, 600);
         setTimeout(notifyHost, 1000);
+        // Clean up temp channel after all broadcasts sent
+        setTimeout(() => {
+          if (tempChannelRef.current === tempChannel) {
+            supabase.removeChannel(tempChannel);
+            tempChannelRef.current = null;
+          }
+        }, 1500);
       }
     });
 
