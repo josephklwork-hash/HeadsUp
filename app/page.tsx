@@ -2976,7 +2976,7 @@ async function joinPinGame() {
     let user: User;
     try {
       const authTimeout = <T,>(p: Promise<T>) =>
-        Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), 15000))]);
+        Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), 30000))]);
 
       // Try local session first (instant)
       const { data: sessionData } = await authTimeout(supabase.auth.getSession());
@@ -2984,7 +2984,8 @@ async function joinPinGame() {
       if (sessionData?.session?.user) {
         user = sessionData.session.user;
       } else {
-        // No valid session — create fresh anonymous user
+        // No valid session — sign out to clear stale tokens, then create fresh anonymous user
+        await supabase.auth.signOut().catch(() => {});
         const { data: anonData, error: anonErr } = await authTimeout(supabase.auth.signInAnonymously());
         if (anonErr || !anonData.user) throw anonErr;
         user = anonData.user;
