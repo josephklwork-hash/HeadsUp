@@ -2172,18 +2172,26 @@ async function joinPinGame() {
         Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), 30000))]);
 
       // Try local session first (instant)
-      const { data: sessionData } = await authTimeout(supabase.auth.getSession());
+      console.log("[joinPinGame] Getting session...");
+      const { data: sessionData, error: sessionErr } = await authTimeout(supabase.auth.getSession());
+      console.log("[joinPinGame] getSession result:", { hasSession: !!sessionData?.session, hasUser: !!sessionData?.session?.user, sessionErr });
 
       if (sessionData?.session?.user) {
         user = sessionData.session.user;
+        console.log("[joinPinGame] Using existing session user:", user.id, "isAnon:", user.is_anonymous);
       } else {
         // No valid session — sign out to clear stale tokens, then create fresh anonymous user
-        await supabase.auth.signOut().catch(() => {});
+        console.log("[joinPinGame] No session, signing out stale tokens...");
+        await supabase.auth.signOut().catch((e) => console.log("[joinPinGame] signOut error (ignored):", e));
+        console.log("[joinPinGame] Attempting anonymous sign-in...");
         const { data: anonData, error: anonErr } = await authTimeout(supabase.auth.signInAnonymously());
-        if (anonErr || !anonData.user) throw anonErr;
+        console.log("[joinPinGame] signInAnonymously result:", { hasUser: !!anonData?.user, anonErr });
+        if (anonErr || !anonData.user) throw anonErr ?? new Error("No user returned from anonymous sign-in");
         user = anonData.user;
+        console.log("[joinPinGame] Created anonymous user:", user.id);
       }
-    } catch {
+    } catch (err) {
+      console.error("[joinPinGame] Auth failed:", err);
       alert("Could not start session. Check your internet and try again.");
       return;
     }
