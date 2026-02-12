@@ -232,7 +232,7 @@ export default function ProfessionalDashboard(p: Record<string, any>) {
       <span>
         {studentProfile.linkedinUrl ? (
           <a
-            href={studentProfile.linkedinUrl.startsWith('http') ? studentProfile.linkedinUrl : `https://${studentProfile.linkedinUrl}`}
+            href={studentProfile.linkedinUrl.match(/^https?:\/\/(www\.)?linkedin\.com/) ? studentProfile.linkedinUrl : `https://linkedin.com/in/`}
             target="_blank"
             rel="noopener noreferrer"
             className="text-blue-600 hover:underline"
@@ -264,7 +264,7 @@ export default function ProfessionalDashboard(p: Record<string, any>) {
     <span>
       {p.linkedinUrl ? (
         <a
-          href={p.linkedinUrl.startsWith('http') ? p.linkedinUrl : `https://${p.linkedinUrl}`}
+          href={p.linkedinUrl.match(/^https?:\/\/(www\.)?linkedin\.com/) ? p.linkedinUrl : `https://linkedin.com/in/`}
           target="_blank"
           rel="noopener noreferrer"
           className="text-blue-600 hover:underline"
@@ -337,7 +337,7 @@ export default function ProfessionalDashboard(p: Record<string, any>) {
     <span>
       {s.linkedinUrl ? (
         <a
-          href={s.linkedinUrl.startsWith('http') ? s.linkedinUrl : `https://${s.linkedinUrl}`}
+          href={s.linkedinUrl.match(/^https?:\/\/(www\.)?linkedin\.com/) ? s.linkedinUrl : `https://linkedin.com/in/`}
               target="_blank"
               rel="noopener noreferrer"
               className="text-blue-600 hover:underline"

@@ -69,10 +69,8 @@ export default function StudentDashboard(p: Record<string, any>) {
                 try {
                   const { error } = await supabase.from('founder_contact_requests').insert({ name: nameValidation.sanitized, email: emailValidation.sanitized });
 if (error) { alert('Something went wrong. Please try again.'); return; }
-fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/send-founder-contact-email`, {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ name: nameValidation.sanitized, email: emailValidation.sanitized }),
+supabase.functions.invoke('send-founder-contact-email', {
+  body: { name: nameValidation.sanitized, email: emailValidation.sanitized },
 }).catch(() => {});
 alert("Thanks! I'll reach out to you soon. – Joseph");
                   setFounderConnectSent(true);
@@ -103,10 +101,8 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
               try {
                 const { error } = await supabase.from('founder_contact_requests').insert({ name: nameValidation.sanitized, email: emailValidation.sanitized });
 if (error) { alert('Something went wrong. Please try again.'); return; }
-fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/send-founder-contact-email`, {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ name: nameValidation.sanitized, email: emailValidation.sanitized }),
+supabase.functions.invoke('send-founder-contact-email', {
+  body: { name: nameValidation.sanitized, email: emailValidation.sanitized },
 }).catch(() => {});
 alert("Thanks! I'll reach out to you soon. – Joseph");
                 setFounderConnectSent(true);
@@ -400,7 +396,7 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
     <span>
       {s.linkedinUrl ? (
         <a
-          href={s.linkedinUrl.startsWith('http') ? s.linkedinUrl : `https://${s.linkedinUrl}`}
+          href={s.linkedinUrl.match(/^https?:\/\/(www\.)?linkedin\.com/) ? s.linkedinUrl : `https://linkedin.com/in/`}
               target="_blank"
               rel="noopener noreferrer"
               className="text-blue-600 hover:underline"
@@ -489,7 +485,7 @@ alert("Thanks! I'll reach out to you soon. – Joseph");
     <span>
       {p.linkedinUrl ? (
         <a
-          href={p.linkedinUrl.startsWith('http') ? p.linkedinUrl : `https://${p.linkedinUrl}`}
+          href={p.linkedinUrl.match(/^https?:\/\/(www\.)?linkedin\.com/) ? p.linkedinUrl : `https://linkedin.com/in/`}
           target="_blank"
           rel="noopener noreferrer"
           className="text-blue-600 hover:underline"

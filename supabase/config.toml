@@ -12,4 +12,4 @@ entrypoint = "./functions/send-connection-email/index.ts"
 
 [functions.create-daily-room]
 enabled = true
-verify_jwt = false
+verify_jwt = true

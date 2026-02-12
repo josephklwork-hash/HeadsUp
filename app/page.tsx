@@ -1001,7 +1001,12 @@ useEffect(() => {
     if (payload.sender === (sbUser?.id ?? (isHost ? 'host' : 'joiner'))) return;
     
     if (payload.event === "PLAYER_INFO") {
-      setOpponentName(payload.name || null);
+      // Validate incoming name — only allow letters, spaces, hyphens, apostrophes (max 50 chars)
+      const rawName = payload.name;
+      const safeName = typeof rawName === 'string' && /^[a-zA-Z\s'-]+$/.test(rawName)
+        ? rawName.slice(0, 50)
+        : null;
+      setOpponentName(safeName);
       
       if (!sentMyInfo) {
         sentMyInfo = true;
@@ -1229,7 +1234,7 @@ const handleOAuthSignIn = async (provider: 'google' | 'linkedin_oidc') => {
       },
     });
     if (error) {
-      alert('Sign-in failed: ' + error.message);
+      alert('Sign-in failed. Please try again.');
       setOauthLoading(false);
     }
   } catch {
@@ -2046,11 +2051,11 @@ async function createPinGame() {
   let user: User;
 
   try {
-    // Try local session first (instant)
-    const { data: sessionData } = await supabase.auth.getSession();
+    // Verify identity with Supabase server (secure)
+    const { data: userData } = await supabase.auth.getUser();
 
-    if (sessionData?.session?.user) {
-      user = sessionData.session.user;
+    if (userData?.user) {
+      user = userData.user;
     } else {
       // No valid session — sign out to clear stale tokens, then create fresh anonymous user
       await supabase.auth.signOut().catch(() => {});
@@ -2172,10 +2177,10 @@ async function joinPinGame() {
         const authTimeout = <T,>(p: Promise<T>) =>
           Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), 30000))]);
 
-        const { data: sessionData } = await authTimeout(supabase.auth.getSession());
+        const { data: userData } = await authTimeout(supabase.auth.getUser());
 
-        if (sessionData?.session?.user) {
-          user = sessionData.session.user;
+        if (userData?.user) {
+          user = userData.user;
         } else {
           await supabase.auth.signOut().catch(() => {});
           const { data: anonData, error: anonErr } = await authTimeout(supabase.auth.signInAnonymously());

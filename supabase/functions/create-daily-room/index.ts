@@ -1,7 +1,9 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 
+const ALLOWED_ORIGIN = Deno.env.get('ALLOWED_ORIGIN') || 'https://headsup-network.vercel.app';
+
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
@@ -98,7 +100,7 @@ serve(async (req) => {
     const data = await response.json();
 
     if (!response.ok) {
-      console.error('Failed to create room:', data);
+      console.error('Failed to create room: status', response.status);
       return new Response(
         JSON.stringify({ error: data.error || 'Failed to create room' }),
         {

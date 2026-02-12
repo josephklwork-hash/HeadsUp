@@ -142,7 +142,7 @@ export default function ConnectionsScreen(p: Record<string, any>) {
                     </div>
                     {selectedChatUser.linkedinUrl && (
                       <a
-                        href={selectedChatUser.linkedinUrl.startsWith('http') ? selectedChatUser.linkedinUrl : `https://${selectedChatUser.linkedinUrl}`}
+                        href={selectedChatUser.linkedinUrl.match(/^https?:\/\/(www\.)?linkedin\.com/) ? selectedChatUser.linkedinUrl : `https://linkedin.com/in/`}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-sm text-blue-600 hover:underline"

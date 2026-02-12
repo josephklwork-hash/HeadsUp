@@ -6,8 +6,10 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 const FROM_EMAIL = Deno.env.get("FROM_EMAIL") || "notifications@yourdomain.com";
 
+const ALLOWED_ORIGIN = Deno.env.get("ALLOWED_ORIGIN") || "https://headsup-network.vercel.app";
+
 const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
@@ -26,6 +28,12 @@ serve(async (req) => {
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
+
+    // Sanitize sender names to prevent HTML injection in email
+    const escapeHtml = (s: string) =>
+      s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    const safeSenderFirst = escapeHtml(String(senderFirstName).slice(0, 50));
+    const safeSenderLast = escapeHtml(String(senderLastName).slice(0, 50));
 
     // Get recipient's email from profiles table
     const supabase = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!);
@@ -60,7 +68,7 @@ serve(async (req) => {
           email: FROM_EMAIL,
           name: "HeadsUp",
         },
-        subject: `${senderFirstName} ${senderLastName} wants to connect on HeadsUp!`,
+        subject: `${safeSenderFirst} ${safeSenderLast} wants to connect on HeadsUp!`,
         content: [
           {
             type: "text/html",
@@ -69,7 +77,7 @@ serve(async (req) => {
                 <h2 style="color: #000; margin-bottom: 24px;">New Connection Request</h2>
                 <p style="font-size: 16px; color: #333;">Hi ${recipient.first_name},</p>
                 <p style="font-size: 16px; color: #333;">
-                  <strong>${senderFirstName} ${senderLastName}</strong> would like to connect with you on HeadsUp!
+                  <strong>${safeSenderFirst} ${safeSenderLast}</strong> would like to connect with you on HeadsUp!
                 </p>
                 <p style="font-size: 16px; color: #333;">
                   Log in to accept their invitation and start networking through poker.
@@ -90,7 +98,7 @@ serve(async (req) => {
 
     if (!emailResponse.ok) {
       const errorText = await emailResponse.text();
-      console.error("SendGrid error:", errorText);
+      console.error("SendGrid error: status", emailResponse.status);
       return new Response(
         JSON.stringify({ error: "Failed to send email" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
